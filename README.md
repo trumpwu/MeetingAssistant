@@ -44,3 +44,29 @@ D:\project\
 │   └── Qwen2.5-7B-Instruct-Q4_K_M.gguf (4.46 GB)
 └── Meetings\                     # 會議紀錄與逐字稿自動存檔目錄
 ```
+
+---
+
+## 💡 專案緣起與協作模式 (Concept & Development)
+
+> **「我是一面工作一面依照需求貢獻，希望有機會幫助到大家；我是概念，你幫我寫。」**
+>
+> *"I build and contribute as real needs arise from my daily work, hoping to help the community. I bring the concepts from the frontline; AI helps me craft the code."*
+> — **Trump Wu**
+
+### 🇹🇼 中文說明 (Traditional Chinese)
+* **💡 核心概念與需求定義 (Concept & Requirements)**：**Trump Wu**
+  - **痛點洞察**：解決高階商務會議與線上視訊即時同傳、冗長逐字稿難以快速提煉核心決策與行動清單的真實痛點。
+  - **產品架構**：定義「雙核心即時同傳 + 1 頁高管精華提煉 + Outlook 富文本一鍵複製 + 100% 地端離線隱私」的完整產品 SOP。
+* **🤖 程式碼撰寫與演算法工程 (AI Implementation)**：**Antigravity (Google DeepMind)**
+  - 實作雙核心 Map-Reduce 精華提煉引擎、本地 Whisper/SenseVoice 語音推論管線、Deno 閘道伺服器與原生 C# 桌面啟動器。
+
+---
+
+### 🌐 English Overview & Story
+* **💡 Concept, Requirements & Vision**: **Trump Wu**
+  - **Real-World Motivation**: Born from enterprise boardroom needs—eliminating the headache of manual transcription and noisy meeting notes while protecting corporate confidentiality.
+  - **Architecture Design**: Combining ultra-fast live speech translation with a 1-page executive summary engine and 100% on-premise offline execution.
+  - *Philosophy: Built through daily work challenges, contributed freely to the open-source community to empower others.*
+* **🤖 Implementation & Engineering**: **Antigravity (Google DeepMind)**
+  - Two-stage LLM distillation engine, offline speech recognition pipeline, and self-contained Windows desktop packaging.
