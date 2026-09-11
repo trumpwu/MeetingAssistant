@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="page-title">AI 智慧會議記錄助理 (繁中即時同傳 & 深度會議紀要)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-group">
+        <div class="logo-icon">🎙️</div>
+        <div>
+          <h1 id="app-title">AI 智慧會議記錄助理</h1>
+          <p id="app-subtitle" class="subtitle">⚡ 英文/中文語音 ➔ 直接轉繁體中文逐字稿 • Qwen 2.5 本機秒級總結 • 100% 離線保密</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <!-- Speech Model Selector -->
+        <div class="engine-select-group">
+          <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 語音模式：</label>
+          <select id="engine-mode-select" class="engine-select">
+            <option value="sensevoice" selected>🔥 繁體中文模式 (極速繁中語音)</option>
+            <option value="whisper-base-tr">🌐 英文同傳模式 (英文即時轉繁體中文)</option>
+          </select>
+        </div>
+
+        <button id="global-download-audio-btn" class="btn btn-success">
+          💾 <span id="global-download-audio-text">下載錄音檔</span>
+        </button>
+
+        <button id="new-meeting-btn" class="btn btn-outline">
+          <span class="btn-icon">➕</span> <span id="new-meeting-btn-text">開啟新會議</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="top-nav">
+      <div style="display: flex; gap: 8px;">
+        <button class="nav-tab-btn active" id="nav-live-tab" data-nav="live-section">
+          🎙️ 即時同傳與會議錄音
+        </button>
+        <button class="nav-tab-btn" id="nav-kb-tab" data-nav="kb-section">
+          📚 歷史會議庫與 AI 對話 (免設定直接開)
+        </button>
+      </div>
+      <div class="memory-badge-pill" id="memory-badge" title="AI 會議特助正透過每一次會議持續強化學習您的企業專用語與風格">
+        🧠 企業記憶庫 (已自主學習)
+      </div>
+    </nav>
+
+    <!-- Section 1: Live Recording Flow Layout -->
+    <main class="main-layout" id="live-section">
+      <!-- Left Column: Settings & Live Recording -->
+      <section class="panel left-panel">
+        
+        <!-- Card 1: Meeting Info & Custom Save Path -->
+        <div class="card">
+          <div class="card-header">
+            <span id="tag-step-1" class="card-tag">步驟 1</span>
+            <h2 id="title-step-1">📅 會議基本資訊與存檔路徑</h2>
+          </div>
+          <div class="card-body">
+            <div class="form-grid">
+              <div class="form-group">
+                <label id="label-date" for="meeting-date">會議日期</label>
+                <input type="date" id="meeting-date" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label id="label-time" for="meeting-time">會議時間</label>
+                <input type="time" id="meeting-time" class="form-control">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label id="label-location" for="meeting-location">會議地點</label>
+              <input type="text" id="meeting-location" class="form-control" placeholder="例如：公司大會議室" list="location-suggestions">
+              <datalist id="location-suggestions">
+                <option value="公司大會議室">
+                <option value="公司小會議室">
+                <option value="線上 Teams / Zoom 會議">
+                <option value="客戶端辦公室">
+                <option value="專案施工現場">
+              </datalist>
+            </div>
+
+            <div class="form-group">
+              <label id="label-title" for="meeting-title">會議主題</label>
+              <input type="text" id="meeting-title" class="form-control" placeholder="例如：跨部門季度專案討論會">
+            </div>
+
+            <div class="form-group">
+              <label id="label-attendees" for="meeting-attendees">出席人員 / 記錄者</label>
+              <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：王專案經理、原廠講師、專案團隊">
+            </div>
+
+            <!-- Auto-Generated File Name -->
+            <div class="filename-box">
+              <div class="filename-label">
+                <span id="label-auto-filename">📁 自動標準檔案名稱：</span>
+                <button id="copy-filename-btn" class="btn-text">複製檔名</button>
+              </div>
+              <div class="filename-input-wrap">
+                <input type="text" id="auto-filename" class="form-control filename-input" spellcheck="false">
+                <span class="file-ext">.md</span>
+              </div>
+            </div>
+
+            <!-- Custom Save Directory Path -->
+            <div class="save-path-box">
+              <div class="filename-label">
+                <span id="label-save-path">📂 自訂存檔儲存路徑 (可自選或點擊切換)：</span>
+              </div>
+              <div class="path-input-group">
+                <input type="text" id="custom-save-path" class="form-control path-input" value="D:\project\Meetings" placeholder="輸入或貼上路徑，例如：D:\project\Meetings">
+              </div>
+              <div class="path-presets">
+                <button type="button" class="path-chip active" data-path="D:\project\Meetings">📁 D:\project\Meetings</button>
+                <button type="button" class="path-chip" data-path="Desktop">🖥️ 桌面 (Desktop)</button>
+                <button type="button" class="path-chip" data-path="Downloads">📥 下載 (Downloads)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Live Recording & Audio Source Switcher -->
+        <div class="card">
+          <div class="card-header">
+            <span id="tag-record" class="card-tag">步驟 2</span>
+            <div class="header-with-badge">
+              <h2 id="title-record">🎙️ 現場錄音與音訊來源</h2>
+              <span id="record-status-badge" class="badge badge-idle">待命</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Audio Input Device Selector (Mic vs System/YouTube Audio) -->
+            <div class="audio-source-group">
+              <label class="source-label">🎵 音訊來源：</label>
+              <div class="source-toggle">
+                <label class="radio-label">
+                  <input type="radio" name="audio-source" value="mic" checked>
+                  <span>🎤 麥克風 (現場說話)</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="audio-source" value="system">
+                  <span>💻 電腦分頁音訊 (錄製 YouTube / 影片)</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="record-controls-row">
+              <button id="start-record-btn" class="btn btn-danger btn-lg">
+                <span class="record-dot"></span> <span id="start-record-text">開始錄音</span>
+              </button>
+              <button id="stop-record-btn" class="btn btn-secondary btn-lg" disabled>
+                ⏹️ <span id="stop-record-text">停止錄音</span>
+              </button>
+              <div class="record-timer" id="record-timer">00:00:00</div>
+            </div>
+
+            <!-- Visual Audio Wave / Live Meter -->
+            <div class="wave-container" id="wave-container">
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <div class="wave-bar"></div>
+              <span class="wave-text" id="wave-text">語音即時監聽中 (英文自動即時轉繁體中文)</span>
+            </div>
+
+            <!-- Recorded Audio Player & Download -->
+            <div class="recorded-audio-box" id="recorded-audio-container" style="display: none;">
+              <div class="audio-info">
+                <span class="audio-name">🎵 錄製音訊：</span>
+                <span id="audio-size-display" class="audio-size">0.0 MB</span>
+              </div>
+              <audio id="audio-player" controls class="audio-player"></audio>
+              <button id="download-audio-btn" class="btn btn-success btn-sm">
+                💾 下載錄音檔 (.webm)
+              </button>
+            </div>
+
+            <!-- Drag & Drop Audio/Video File to Direct Transcribe -->
+            <div class="file-dropzone" id="file-dropzone">
+              <div class="dropzone-icon">📁</div>
+              <div class="dropzone-text">
+                <strong>拖曳音訊/影片檔案至此 (支援 iPhone M4A / LINE音檔 / MP3 / WAV / WebM / MP4)</strong>
+                <span>或點擊選擇檔案，後端本機 AI 自動極速辨識並輸出繁中逐字稿</span>
+              </div>
+              <input type="file" id="audio-file-input" accept="audio/*,video/*,.m4a,.aac,.mp3,.wav,.webm,.ogg,.flac,.mp4" style="display: none;">
+              <button type="button" id="browse-file-btn" class="btn btn-outline btn-sm">選擇 M4A / 影音檔案</button>
+            </div>
+            <div id="file-transcribe-progress" class="transcribe-progress" style="display: none;">
+              <span class="spinner">⏳</span> <span>正在以本地端 AI 轉錄並翻譯為繁體中文...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Speaker Mapping Card -->
+        <div class="card">
+          <div class="card-header">
+            <span id="tag-step-speaker" class="card-tag">發言人對應</span>
+            <h2>👥 發言人姓名自訂</h2>
+          </div>
+          <div class="card-body">
+            <p class="help-text">系統支援無限多位與會者（無人數上限），輸入後自動替換全文逐字稿與會議紀錄：</p>
+            <div class="speaker-mapping-list" id="speaker-list">
+              <div class="speaker-row">
+                <span class="speaker-badge">Speaker 1</span>
+                <input type="text" class="form-control speaker-name-input" data-speaker="Speaker 1" placeholder="例如：王專案經理">
+              </div>
+              <div class="speaker-row">
+                <span class="speaker-badge">Speaker 2</span>
+                <input type="text" class="form-control speaker-name-input" data-speaker="Speaker 2" placeholder="例如：原廠講師">
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+              <button id="add-speaker-btn" class="btn btn-outline btn-sm">➕ 新增發言人</button>
+              <button id="auto-detect-speakers-btn" class="btn btn-outline btn-sm">🔍 自動偵測發言人</button>
+              <button id="apply-speakers-btn" class="btn btn-primary btn-sm">⚡ 立即替換姓名</button>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Right Column: Live Chinese Transcript & AI Meeting Minutes -->
+      <section class="panel right-panel">
+        
+        <!-- Step 3: Real-Time Traditional Chinese Transcript -->
+        <div class="card transcript-card">
+          <div class="card-header">
+            <span id="tag-step-3" class="card-tag">步驟 3</span>
+            <div class="header-with-badge">
+              <h2 id="title-step-3">📝 現場中文逐字稿 (英文/中文皆自動轉為繁中)</h2>
+              <span class="badge badge-chinese">100% 繁體中文</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="transcript-toolbar">
+              <span class="transcript-stats" id="transcript-stats">字數：0 | 行數：0</span>
+              <div class="toolbar-btns">
+                <button id="clear-transcript-btn" class="btn-text">清空內容</button>
+              </div>
+            </div>
+
+            <!-- Real-Time Instant Live Translation Subtitle Bar -->
+            <div class="live-subtitle-bar" id="live-subtitle-bar">
+              <div class="live-pulse-dot"></div>
+              <div class="live-text-wrap">
+                <span class="live-stream-tag">⚡ 實時同傳：</span>
+                <span id="live-stream-text" class="live-stream-text">（等待語音輸入，說話時繁體中文將隨聲即時逐字跳出...）</span>
+              </div>
+            </div>
+
+            <textarea id="raw-transcript" class="form-control transcript-textarea" placeholder="現場錄音或上傳音檔後，無論說英文或中文，皆會自動翻譯為流暢繁體中文逐字稿出現在此處..."></textarea>
+            
+            <div class="generate-action-bar">
+              <button id="generate-summary-btn" class="btn btn-primary btn-xl">
+                <span class="btn-icon">⚡</span> <span id="generate-summary-text">一鍵產出深度重點會議紀錄 (Qwen 2.5 AI)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: AI Generated Executive Meeting Minutes Output -->
+        <div class="card output-card" id="output-section">
+          <div class="card-header">
+            <span id="tag-step-4" class="card-tag">步驟 4</span>
+            <div class="header-with-tabs">
+              <h2>📋 結構化重點會議紀錄與行動矩陣</h2>
+              <div class="tab-group">
+                <button class="tab-btn active" data-tab="rendered">👁️ 視覺化排版</button>
+                <button class="tab-btn" data-tab="markdown">📝 Markdown 原始碼</button>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Rendered Markdown View -->
+            <div id="tab-rendered" class="tab-content active">
+              <div id="output-rendered" class="markdown-preview">
+                <p class="placeholder-text" id="placeholder-output">點擊上方「一鍵產出深度重點會議紀錄」，Qwen 2.5 本機 AI 將在 3 秒內提煉執行核心結論、待辦行動矩陣與關鍵指標...</p>
+              </div>
+            </div>
+
+            <!-- Raw Markdown View -->
+            <div id="tab-markdown" class="tab-content">
+              <textarea id="output-markdown" class="form-control markdown-textarea" readonly spellcheck="false"></textarea>
+            </div>
+
+            <!-- Export Toolbar -->
+            <div class="export-toolbar">
+              <button id="copy-outlook-btn" class="btn btn-primary">
+                📧 複製為 Outlook 格式 (富文本表格排版)
+              </button>
+              <button id="copy-result-btn" class="btn btn-secondary">
+                📋 複製 Markdown 原始碼
+              </button>
+              <button id="download-md-btn" class="btn btn-success">
+                💾 下載 Markdown 檔 (另存新檔)
+              </button>
+              <button id="rl-feedback-btn" class="btn btn-outline" style="border-color: #8b5cf6; color: #7c3aed; font-weight: 700;">
+                🧠 👍 納入 AI 強化學習 (標竿範例)
+              </button>
+              <button id="print-btn" class="btn btn-outline">
+                🖨️ 列印 / 轉存 PDF
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- Section 2: Knowledge Base & AI Chat Layout -->
+    <main class="main-layout kb-layout" id="kb-section" style="display: none;">
+      <!-- KB Left Column: Meeting Files List -->
+      <aside class="panel kb-left-panel">
+        <div class="card kb-list-card">
+          <div class="card-header">
+            <h2>📁 歷史會議紀錄</h2>
+            <div class="kb-list-header-actions">
+              <input type="file" id="kb-import-file-input" accept=".md,.txt" style="display: none;">
+              <button id="kb-import-btn" class="btn btn-sm btn-primary" title="從外部資料夾匯入 .md 或 .txt 會議紀錄">➕ 匯入檔案</button>
+              <button id="refresh-kb-btn" class="btn btn-sm btn-outline" title="重新整理清單">🔄</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <input type="text" id="kb-search-input" class="form-control" placeholder="🔍 搜尋會議紀錄標題或日期...">
+            <div id="kb-meeting-list" class="kb-meeting-list">
+              <div class="loading-spinner">載入會議檔案中...</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- KB Right Column: Document Viewer & AI Chat -->
+      <section class="panel kb-right-panel">
+        <div class="card kb-viewer-card">
+          <div class="card-header kb-viewer-header">
+            <div>
+              <span class="card-tag">目前檢視</span>
+              <h2 id="kb-doc-title">請由左側點選會議紀錄</h2>
+            </div>
+            <div class="kb-actions">
+              <button id="kb-copy-outlook-btn" class="btn btn-primary btn-sm">📧 複製為 Outlook 格式</button>
+              <button id="kb-download-btn" class="btn btn-outline btn-sm">💾 另存新檔</button>
+              <button id="kb-delete-btn" class="btn btn-danger btn-sm" title="刪除此筆會議紀錄">🗑️ 刪除</button>
+            </div>
+          </div>
+          
+          <div class="card-body kb-viewer-body">
+            <!-- Rendered Markdown View -->
+            <div id="kb-doc-content" class="markdown-preview kb-preview-content">
+              <p class="placeholder-text">👈 請由左側會議清單點選任一份會議紀錄，系統將自動以頂級高階主管格式為您完整呈現！</p>
+            </div>
+
+            <!-- Integrated AI Q&A Panel -->
+            <div class="kb-ai-chat-box">
+              <div class="kb-ai-header">
+                <span class="kb-ai-badge">🤖 詢問本機 Qwen 2.5 7B AI 大腦 (針對本篇會議)</span>
+                <div class="quick-chips">
+                  <button class="chip-btn" data-q="請列出本場會議所有待辦事項、負責人與預計完成時程">📋 待辦事項清單</button>
+                  <button class="chip-btn" data-q="請列出本場會議提及的所有財務金額、補助比率與關鍵數字">💰 金額與關鍵數據</button>
+                  <button class="chip-btn" data-q="請用三點精準總結本場會議最重要的執行長決策">🎯 核心決策精華</button>
+                </div>
+              </div>
+              <div class="kb-ai-input-wrap">
+                <input type="text" id="kb-ai-input" class="form-control" placeholder="對本篇會議有任何疑問？請直接在此提問 (例如：本專案的關鍵交付時程與負責人是誰？)...">
+                <button id="kb-ai-send-btn" class="btn btn-primary">🚀 送出提問</button>
+              </div>
+              <div id="kb-ai-response" class="kb-ai-response" style="display: none;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    <!-- Persistent Live Diagnostic & Activity Log Bar -->
+    <footer class="app-status-bar">
+      <div class="status-indicators">
+        <span class="status-pill status-ok"><span class="dot"></span> Web 伺服器：127.0.0.1:8088</span>
+        <span class="status-pill status-ok"><span class="dot"></span> Qwen 2.5 AI 大腦：127.0.0.1:8080</span>
+        <span class="status-pill status-ok"><span class="dot"></span> Whisper 離線語音：就緒</span>
+      </div>
+      <div class="status-log-preview" id="status-log-preview">
+        <span class="log-tag">日誌</span> <span id="latest-log-text">系統就緒，所有本地服務已連線。</span>
+        <button id="toggle-log-drawer-btn" class="btn-text btn-sm" title="展開完整系統紀錄">📜 展開日誌</button>
+      </div>
+    </footer>
+
+    <!-- Expandable System Activity Drawer -->
+    <div id="system-log-drawer" class="system-log-drawer" style="display: none;">
+      <div class="drawer-header">
+        <strong>🔍 本機系統運行與錯誤診斷日誌 (即時留存)</strong>
+        <div>
+          <button id="clear-log-btn" class="btn btn-outline btn-xs">清空日誌</button>
+          <button id="close-log-drawer-btn" class="btn-text btn-xs">✕ 關閉</button>
+        </div>
+      </div>
+      <div id="system-log-console" class="system-log-console"></div>
+    </div>
+
+    <!-- Global Toast Notification -->
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <script src="app.js?v=20260901_3"></script>
+</body>
+</html>
