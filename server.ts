@@ -483,6 +483,16 @@ ${consolidatedFacts.slice(0, 16000)}`;
       Deno.writeTextFileSync(projPath, content);
       try { Deno.writeTextFileSync(deskPath, content); } catch (_) {}
 
+      // Automatically deposit a copy to D:\project\TrainingData\[Topic]_(地端初稿).md
+      if (type === "markdown") {
+        try {
+          const trainingDir = "D:\\project\\TrainingData";
+          const baseTopic = cleanName.replace(/\.md$/, "").replace(/_\(地端初稿\)$/, "");
+          const trainingDraftPath = `${trainingDir}\\${baseTopic}_(地端初稿).md`;
+          Deno.writeTextFileSync(trainingDraftPath, content);
+        } catch (_) {}
+      }
+
       return Response.json({ success: true, path: projPath, desktopPath: deskPath });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
