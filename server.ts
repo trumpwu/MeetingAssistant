@@ -361,16 +361,19 @@ ${consolidatedFacts.slice(0, 16000)}`;
   // 6. API: /api/save-audio (Automatically saves recorded audio blob)
   if (pathname === "/api/save-audio" && req.method === "POST") {
     try {
-      const filename = req.headers.get("X-Filename") || `Recording_${Date.now()}.webm`;
+      const rawHeader = req.headers.get("X-Filename");
+      const filename = rawHeader ? decodeURIComponent(rawHeader) : `Recording_${Date.now()}.webm`;
       const cleanName = filename.endsWith(".webm") ? filename : `${filename}.webm`;
       const rawBytes = new Uint8Array(await req.arrayBuffer());
 
+      try { Deno.mkdirSync(meetingsDir, { recursive: true }); } catch (_) {}
       const projPath = `${meetingsDir}\\${cleanName}`;
       const deskPath = `${desktopDir}\\${cleanName}`;
 
       Deno.writeFileSync(projPath, rawBytes);
       try { Deno.writeFileSync(deskPath, rawBytes); } catch (_) {}
 
+      console.log(`[SaveAudio] Saved ${rawBytes.length} bytes to ${projPath}`);
       return Response.json({ success: true, path: projPath });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });

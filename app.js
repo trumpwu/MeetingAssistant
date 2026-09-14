@@ -381,12 +381,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTranscriptStats();
               });
             } else {
-              // Chinese Mode - Real-time continuous accumulation
-              const formattedLine = `[${nowTime}] [${spkTag}]: ${finalRaw}`;
-              rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
-              rawTranscript.scrollTop = rawTranscript.scrollHeight;
-              updateTranscriptStats();
-              liveStreamText.textContent = `✅ [${spkTag}]: ${finalRaw}`;
+              // Chinese Mode - Preview in status bar only, keep rawTranscript pristine for Whisper
+              liveStreamText.textContent = `🎙️ [${spkTag}]: ${finalRaw}`;
             }
 
             if (finalRaw.endsWith('.') || finalRaw.endsWith('。') || finalRaw.length > 25) {
@@ -535,15 +531,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const currentFilename = autoFilenameInput ? autoFilenameInput.value.trim() : `Recording_${Date.now()}`;
         
-        // 1. Auto-persist audio to disk
-        fetch('/api/save-audio', {
-          method: 'POST',
-          headers: { 'X-Filename': encodeURIComponent(currentFilename) },
-          body: recordedBlob
-        }).catch(err => console.warn('Audio auto-save error:', err));
+        // 1. Auto-persist audio to disk with emergency browser fallback
+        try {
+          const saveRes = await fetch('/api/save-audio', {
+            method: 'POST',
+            headers: { 'X-Filename': encodeURIComponent(currentFilename) },
+            body: recordedBlob
+          });
+          const saveData = await saveRes.json();
+          if (saveData.success) {
+            console.log('Audio saved successfully to:', saveData.path);
+          } else {
+            throw new Error(saveData.error || 'Server save failed');
+          }
+        } catch (saveErr) {
+          console.warn('Audio auto-save to server failed, triggering emergency browser download:', saveErr);
+          const a = document.createElement('a');
+          a.href = audioUrl;
+          a.download = `${currentFilename}.webm`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
+        }
 
-        // 2. Local Offline Whisper AI Auto-Transcribe (Always overwrite browser speech-to-text with Whisper)
-        showToast('🎙️ 錄音已結束，正在使用本地端 Whisper AI 全篇精準轉錄 (高精度多線程)...', 5000);
+        // 2. Guaranteed Local Offline Whisper AI Auto-Transcribe
+        rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 Whisper AI 正在全力進行高精度離線轉錄中，請稍候...\n（20~30 分鐘錄音約需 1 分鐘，請勿關閉視窗）`;
+        updateTranscriptStats();
+        showToast('🎙️ 本地端 Whisper AI 正在全速轉錄音訊中...', 6000);
+
         try {
           const res = await fetch('/api/transcribe-file', {
             method: 'POST',
@@ -570,12 +586,14 @@ document.addEventListener('DOMContentLoaded', () => {
               .join('\n');
             rawTranscript.value = formatted;
             updateTranscriptStats();
-            showToast('✨ 本地 Whisper AI 已完成離線高精度逐字稿轉錄！已自動替換瀏覽器粗稿。', 4000);
+            showToast('✨ 本地 Whisper AI 已完成高精度轉錄！請檢視發言人後點擊「一鍵產出重點會議紀錄」。', 5000);
           } else {
-            console.warn('Whisper transcription fallback to browser draft:', data?.error);
+            rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
+            showToast(`⚠️ 轉錄提示: ${data?.error || '未能辨識出清晰人聲'}`, 5000);
           }
         } catch (e) {
-          console.warn('Auto offline transcribe notice:', e);
+          rawTranscript.value = `[轉錄提示] ⚠️ 本機轉錄連線異常，請確認後端服務正常運行。\n異常資訊：${e.message}`;
+          showToast(`❌ 轉錄連線失敗: ${e.message}`, 5000);
         }
       };
 
