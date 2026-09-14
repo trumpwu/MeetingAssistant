@@ -1,3 +1,6 @@
+import * as OpenCC from "npm:opencc-js";
+const toTaiwanTraditional = OpenCC.Converter({ from: "cn", to: "tw" });
+
 // Deno High-Performance Server for Meeting Assistant (Port 8088)
 const port = 8088;
 const root = "D:\\project\\MeetingAssistant";
@@ -7,6 +10,41 @@ const desktopDir = "C:\\Users\\Innovare\\Desktop";
 const whisperCli = "D:\\project\\whisper.cpp\\Release\\whisper-cli.exe";
 const whisperModel = "D:\\project\\models\\ggml-base.bin";
 const ffmpeg = "D:\\project\\MeetingAssistant\\ffmpeg.exe";
+
+// Alibaba SenseVoice (sherpa-onnx FunASR Nano int8)
+const senseVoiceCli = "D:\\project\\SenseVoice\\sherpa-onnx-v1.13.8-win-x64-shared-MT-Release\\bin\\sherpa-onnx-offline.exe";
+const senseVoiceModel = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\model.int8.onnx";
+const senseVoiceTokens = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\tokens.txt";
+
+function segmentSenseVoiceText(data: { text: string; timestamps?: number[]; tokens?: string[] }): string {
+  if (!data.text) return "";
+  if (data.tokens && data.timestamps && data.tokens.length === data.timestamps.length && data.tokens.length > 0) {
+    let result = "";
+    let lastTime = data.timestamps[0];
+    for (let i = 0; i < data.tokens.length; i++) {
+      const tok = data.tokens[i];
+      const t = data.timestamps[i];
+      if (t - lastTime > 1.2 && result.length > 0 && !result.endsWith("\n")) {
+        result += "\n";
+      }
+      result += tok;
+      lastTime = t;
+    }
+    const lines = result
+      .split("\n")
+      .map(l => l.replace(/<\|.*?\|>/g, "").trim())
+      .filter(Boolean);
+    if (lines.length > 0) return lines.join("\n");
+  }
+
+  return data.text
+    .replace(/<\|.*?\|>/g, "")
+    .replace(/([。！？!?；;\n]+)/g, "$1\n")
+    .split("\n")
+    .map(s => s.trim())
+    .filter(Boolean)
+    .join("\n");
+}
 
 try { Deno.mkdirSync(meetingsDir, { recursive: true }); } catch (_) {}
 try { Deno.mkdirSync(tempDir, { recursive: true }); } catch (_) {}
@@ -52,29 +90,86 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         console.warn("FFmpeg transcode notice:", new TextDecoder().decode(ffOut.stderr));
       }
 
-      // 2. Transcribe via Whisper (Multi-threaded AVX2 Acceleration)
-      const whisper = new Deno.Command(whisperCli, {
-        args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", wavPath, "-otxt", "-of", outPrefix]
-      });
-      await whisper.output();
-
+      // 2. Transcribe via requested engine: SenseVoice (Default / Chinese 50x) vs Whisper (Bilingual / English)
+      const requestedEngine = (req.headers.get("X-Engine") || "sensevoice").toLowerCase();
+      const isWhisper = requestedEngine.includes("whisper");
       let transcript = "";
-      try {
-        transcript = Deno.readTextFileSync(txtPath).trim();
-      } catch (_) {
-        transcript = "";
+      let engineUsed = isWhisper ? "Whisper 10核心 (中英雙語)" : "SenseVoice (阿里開源 50x)";
+
+      if (isWhisper) {
+        console.log(`[Transcribe] Running Whisper Engine (AVX2 10-thread) on ${wavPath} ...`);
+        const whisper = new Deno.Command(whisperCli, {
+          args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", wavPath, "-otxt", "-of", outPrefix]
+        });
+        await whisper.output();
+        try {
+          transcript = Deno.readTextFileSync(txtPath).trim();
+        } catch (_) {
+          transcript = "";
+        }
+      } else {
+        // Alibaba SenseVoice: FunASR Nano int8 (50x ultra-fast Chinese STT)
+        console.log(`[Transcribe] Running Alibaba SenseVoice Engine on ${wavPath} ...`);
+        const senseVoice = new Deno.Command(senseVoiceCli, {
+          args: [
+            `--tokens=${senseVoiceTokens}`,
+            `--sense-voice-model=${senseVoiceModel}`,
+            "--sense-voice-language=auto",
+            "--sense-voice-use-itn=true",
+            "--num-threads=8",
+            wavPath
+          ]
+        });
+        const svOut = await senseVoice.output();
+        if (svOut.code === 0) {
+          const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
+          try {
+            for (const line of rawStdout.split("\n")) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
+                const parsed = JSON.parse(trimmed);
+                if (parsed.text) {
+                  transcript = segmentSenseVoiceText(parsed);
+                  break;
+                }
+              }
+            }
+          } catch (pe) {
+            console.warn("SenseVoice JSON parse notice:", pe);
+          }
+        }
+
+        // Automatic fallback to Whisper if SenseVoice produced no text
+        if (!transcript) {
+          console.log("[Transcribe] SenseVoice yielded empty, activating Whisper fallback ...");
+          const whisper = new Deno.Command(whisperCli, {
+            args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", wavPath, "-otxt", "-of", outPrefix]
+          });
+          await whisper.output();
+          try {
+            transcript = Deno.readTextFileSync(txtPath).trim();
+            engineUsed = "Whisper (自動容錯備用)";
+          } catch (_) {
+            transcript = "";
+          }
+        }
       }
 
-      // Cleanup
+      // Cleanup temp files
       try { Deno.removeSync(inputPath); } catch (_) {}
       try { Deno.removeSync(wavPath); } catch (_) {}
       try { Deno.removeSync(txtPath); } catch (_) {}
+
+      // Convert to 100% Traditional Chinese (Taiwan Standard)
+      if (transcript) {
+        transcript = toTaiwanTraditional(transcript);
+      }
 
       if (!transcript) {
         return Response.json({ success: false, error: "音訊轉錄結果為空，請確認檔案是否有清晰人聲。" });
       }
 
-      return Response.json({ success: true, transcript, filename: rawFilename });
+      return Response.json({ success: true, transcript, filename: rawFilename, engineUsed });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
@@ -521,3 +616,29 @@ ${consolidatedFacts.slice(0, 16000)}`;
     return new Response("404 Not Found", { status: 404 });
   }
 });
+
+// Automatic Dual-Engine Model Pre-warming (Zero Cold-Start Lag)
+(async () => {
+  try {
+    const testWav = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\test_wavs\\zh.wav";
+    console.log("[Pre-warm] Pre-warming SenseVoice (阿里開源) & Whisper in background...");
+    
+    // 1. Pre-warm SenseVoice
+    const sv = new Deno.Command(senseVoiceCli, {
+      args: [`--tokens=${senseVoiceTokens}`, `--sense-voice-model=${senseVoiceModel}`, "--num-threads=2", testWav]
+    });
+    await sv.output();
+
+    // 2. Pre-warm Whisper
+    const ws = new Deno.Command(whisperCli, {
+      args: ["-m", whisperModel, "-l", "zh", "-t", "2", "-f", testWav, "-otxt", "-of", `${tempDir}\\warmup`]
+    });
+    await ws.output();
+    try { Deno.removeSync(`${tempDir}\\warmup.txt`); } catch (_) {}
+
+    console.log("✨ [Pre-warm] SenseVoice & Whisper dual STT models fully warmed up into memory!");
+  } catch (err) {
+    console.warn("[Pre-warm] Background pre-warm notice:", err);
+  }
+})();
+

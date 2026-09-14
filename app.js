@@ -348,7 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     speechRecognizer.onresult = (event) => {
       let interim = '';
-      const isEnglishMode = engineSelect.value === 'whisper-base-tr';
+      const isEnglishMode = engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr');
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const transcriptChunk = event.results[i][0].transcript;
@@ -461,14 +461,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Language switcher event listener
     if (engineSelect) {
       engineSelect.addEventListener('change', () => {
-        const isEng = engineSelect.value === 'whisper-base-tr';
+        const isEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr';
         speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
         if (isRecording) {
           try { speechRecognizer.stop(); } catch (_) {}
         }
         if (waveText) {
           waveText.textContent = isEng ?
-            '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以繁體中文極速聽取中...';
+            '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
         }
       });
     }
@@ -555,18 +555,25 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
         }
 
-        // 2. Guaranteed Local Offline Whisper AI Auto-Transcribe
-        rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 Whisper AI 正在全力進行高精度離線轉錄中，請稍候...\n（20~30 分鐘錄音約需 1 分鐘，請勿關閉視窗）`;
+        // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x vs Whisper)
+        const currentEngine = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'whisper' : 'sensevoice';
+        const engineLabel = currentEngine === 'sensevoice' ? '阿里 SenseVoice (50x 極速繁中)' : 'Whisper 10核心 (中英雙語)';
+        rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在全力進行離線轉錄中，請稍候...`;
         updateTranscriptStats();
-        showToast('🎙️ 本地端 Whisper AI 正在全速轉錄音訊中...', 6000);
+        showToast(`🎙️ 本地端 ${engineLabel} 正在轉錄音訊中...`, 6000);
 
         try {
+          const t0 = Date.now();
           const res = await fetch('/api/transcribe-file', {
             method: 'POST',
-            headers: { 'X-Filename': encodeURIComponent(`${currentFilename}.webm`) },
+            headers: {
+              'X-Filename': encodeURIComponent(`${currentFilename}.webm`),
+              'X-Engine': currentEngine
+            },
             body: recordedBlob
           });
           const data = await res.json();
+          const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
           if (data.success && data.transcript) {
             let curSpeaker = 1;
             const formatted = data.transcript
@@ -586,7 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
               .join('\n');
             rawTranscript.value = formatted;
             updateTranscriptStats();
-            showToast('✨ 本地 Whisper AI 已完成高精度轉錄！請檢視發言人後點擊「一鍵產出重點會議紀錄」。', 5000);
+            showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！請點擊「一鍵產出重點會議紀錄」。`, 5000);
           } else {
             rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
             showToast(`⚠️ 轉錄提示: ${data?.error || '未能辨識出清晰人聲'}`, 5000);
@@ -604,7 +611,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Start Speech Recognizer with configured language
       if (speechRecognizer) {
-        speechRecognizer.lang = engineSelect.value === 'whisper-base-tr' ? 'en-US' : 'zh-TW';
+        speechRecognizer.lang = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'en-US' : 'zh-TW';
         try { speechRecognizer.start(); } catch (e) {}
       }
 
@@ -614,8 +621,8 @@ document.addEventListener('DOMContentLoaded', () => {
       recordStatusBadge.textContent = '錄音辨識中';
       recordStatusBadge.className = 'badge badge-recording';
       waveContainer.classList.add('recording');
-      waveText.textContent = engineSelect.value === 'whisper-base-tr' ?
-        '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以 SenseVoice 極速聽取繁體中文...';
+      waveText.textContent = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ?
+        '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
       
       showToast('🔴 錄音與即時辨識已啟動！');
     } catch (err) {
@@ -720,18 +727,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function handleAudioFileUpload(file) {
     if (!file) return;
+    const currentEngine = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'whisper' : 'sensevoice';
+    const engineLabel = currentEngine === 'sensevoice' ? '阿里 SenseVoice (50x 極速繁中)' : 'Whisper 10核心 (中英雙語)';
     fileTranscribeProgress.style.display = 'flex';
-    showToast(`🎙️ 正在以本地 Whisper AI 轉錄 ${file.name} (請稍候)...`, 4000);
+    showToast(`🎙️ 正在以 ${engineLabel} 轉錄 ${file.name} (請稍候)...`, 4000);
 
     try {
+      const t0 = Date.now();
       const res = await fetch('/api/transcribe-file', {
         method: 'POST',
         headers: {
-          'X-Filename': encodeURIComponent(file.name)
+          'X-Filename': encodeURIComponent(file.name),
+          'X-Engine': currentEngine
         },
         body: file
       });
       const data = await res.json();
+      const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
       if (data.success && data.transcript) {
         let curSpeaker = 1;
         const formatted = data.transcript
@@ -753,7 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
         rawTranscript.value = (rawTranscript.value ? rawTranscript.value + '\n\n' : '') + formatted;
         rawTranscript.scrollTop = rawTranscript.scrollHeight;
         updateTranscriptStats();
-        showToast(`✨ 成功轉錄 ${file.name}！已自動載入逐字稿，可直接產出重點會議紀錄！`, 5000);
+        showToast(`✨ 成功以 ${data.engineUsed || engineLabel} 轉錄 ${file.name} (耗時 ${elapsedSec}s)！可直接產出重點會議紀錄！`, 5000);
       } else {
         showToast(`❌ 轉錄失敗：${data.error || '無法辨識音訊內容'}`);
       }
