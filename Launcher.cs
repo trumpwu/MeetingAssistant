@@ -82,13 +82,13 @@ namespace MeetingAssistantLauncher
                 if (!IsPortOpen("127.0.0.1", 8080))
                 {
                     UpdateStatus("正在喚醒 Qwen 2.5 7B AI 大腦 (本機離線載入)...");
-                    string model = Path.Combine(modelsDir, "Qwen2.5-7B-Instruct-Q4_K_M.gguf");
+                    string model = Path.Combine(modelsDir, "qwen2.5-7b-instruct-q4_k_m.gguf");
+                    if (!File.Exists(model)) model = Path.Combine(modelsDir, "Qwen2.5-7B-Instruct-Q4_K_M.gguf");
                     if (!File.Exists(model)) model = Path.Combine(modelsDir, "Qwen2.5-3B-Instruct-Q4_K_M.gguf");
-                    if (!File.Exists(model)) model = Path.Combine(modelsDir, "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf");
 
                     ProcessStartInfo psiLlama = new ProcessStartInfo();
                     psiLlama.FileName = llamaExe;
-                    psiLlama.Arguments = string.Format("-m \"{0}\" --port 8080 -c 32768 --threads 8 --host 127.0.0.1", model);
+                    psiLlama.Arguments = string.Format("-m \"{0}\" --port 8080 -c 8192 --threads 10 --host 127.0.0.1", model);
                     psiLlama.WindowStyle = ProcessWindowStyle.Hidden;
                     psiLlama.CreateNoWindow = true;
                     psiLlama.UseShellExecute = false;
@@ -101,7 +101,7 @@ namespace MeetingAssistantLauncher
                     UpdateStatus("正在啟動會議助理 Web 本機伺服器...");
                     ProcessStartInfo psiDeno = new ProcessStartInfo();
                     psiDeno.FileName = denoExe;
-                    psiDeno.Arguments = "run -A server.ts";
+                    psiDeno.Arguments = "run -A --no-check server.ts";
                     psiDeno.WorkingDirectory = appDir;
                     psiDeno.WindowStyle = ProcessWindowStyle.Hidden;
                     psiDeno.CreateNoWindow = true;
@@ -112,7 +112,7 @@ namespace MeetingAssistantLauncher
                 // 3. Health Check Polling
                 UpdateStatus("正在檢測服務連線狀態...");
                 bool ready = false;
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < 30; i++)
                 {
                     Thread.Sleep(500);
                     if (IsWebReady("http://127.0.0.1:8088/"))

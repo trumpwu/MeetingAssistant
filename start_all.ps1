@@ -4,11 +4,10 @@
 $is8080 = netstat -ano | findstr ":8080" | findstr "LISTENING"
 if (-not $is8080) {
     Write-Host "[1/3] 正在載入 Qwen 2.5 7B AI 大腦..." -ForegroundColor Cyan
-    $model = "D:\project\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-    if (-not (Test-Path $model)) { $model = "D:\project\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf" }
-    if (-not (Test-Path $model)) { $model = "D:\project\models\Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" }
+    $model = "D:\project\models\qwen2.5-7b-instruct-q4_k_m.gguf"
+    if (-not (Test-Path $model)) { $model = "D:\project\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf" }
 
-    $llamaArgs = @("-m", $model, "--port", "8080", "-c", "32768", "--threads", "8", "--host", "127.0.0.1")
+    $llamaArgs = @("-m", $model, "--port", "8080", "-c", "8192", "--threads", "10", "--host", "127.0.0.1")
     Start-Process -FilePath "D:\project\llama.cpp\llama-server.exe" -ArgumentList $llamaArgs -WindowStyle Hidden
 } else {
     Write-Host "[1/3] Qwen 2.5 7B AI 大腦已在運行中。" -ForegroundColor Green
@@ -18,7 +17,7 @@ if (-not $is8080) {
 $is8088 = netstat -ano | findstr ":8088" | findstr "LISTENING"
 if (-not $is8088) {
     Write-Host "[2/3] 正在啟動會議助理 Web 本機伺服器..." -ForegroundColor Cyan
-    $denoArgs = @("run", "-A", "D:\project\MeetingAssistant\server.ts")
+    $denoArgs = @("run", "-A", "--no-check", "D:\project\MeetingAssistant\server.ts")
     Start-Process -FilePath "D:\project\deno.exe" -ArgumentList $denoArgs -WorkingDirectory "D:\project\MeetingAssistant" -WindowStyle Hidden
 } else {
     Write-Host "[2/3] 會議助理 Web 伺服器已在運行中。" -ForegroundColor Green

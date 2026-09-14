@@ -435,11 +435,11 @@ ${consolidatedFacts.slice(0, 16000)}`;
             const cleanJsonMatch = rawJson.match(/\{[\s\S]*\}/);
             if (cleanJsonMatch) {
               const newEntities = JSON.parse(cleanJsonMatch[0]);
-              let currentMem = { learned_rules: [], enterprise_entities: {} };
+              let currentMem: any = { learned_rules: [], enterprise_entities: {} };
               try { currentMem = JSON.parse(Deno.readTextFileSync(memoryPath)); } catch (_) {}
               
-              const ent = currentMem.enterprise_entities || {};
-              for (const [k, arr] of Object.entries(newEntities)) {
+              const ent: any = currentMem.enterprise_entities || {};
+              for (const [k, arr] of Object.entries(newEntities as Record<string, any>)) {
                 if (Array.isArray(arr)) {
                   ent[k] = Array.from(new Set([...(ent[k] || []), ...arr]));
                 }
