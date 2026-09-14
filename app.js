@@ -542,18 +542,17 @@ document.addEventListener('DOMContentLoaded', () => {
           body: recordedBlob
         }).catch(err => console.warn('Audio auto-save error:', err));
 
-        // 2. Local Offline Whisper AI Auto-Transcribe (Guarantees zero speech loss offline)
-        if (rawTranscript.value.trim().length < 15) {
-          showToast('🎙️ 正在以本地端 Whisper AI 全篇精準轉錄 (100% 離線支援)...', 4000);
-          try {
-            const res = await fetch('/api/transcribe-file', {
-              method: 'POST',
-              headers: { 'X-Filename': encodeURIComponent(`${currentFilename}.webm`) },
-              body: recordedBlob
-            });
-            const data = await res.json();
-            if (data.success && data.transcript) {
-              let curSpeaker = 1;
+        // 2. Local Offline Whisper AI Auto-Transcribe (Always overwrite browser speech-to-text with Whisper)
+        showToast('🎙️ 錄音已結束，正在使用本地端 Whisper AI 全篇精準轉錄 (高精度多線程)...', 5000);
+        try {
+          const res = await fetch('/api/transcribe-file', {
+            method: 'POST',
+            headers: { 'X-Filename': encodeURIComponent(`${currentFilename}.webm`) },
+            body: recordedBlob
+          });
+          const data = await res.json();
+          if (data.success && data.transcript) {
+            let curSpeaker = 1;
             const formatted = data.transcript
               .split('\n')
               .map(l => l.trim())
@@ -571,13 +570,12 @@ document.addEventListener('DOMContentLoaded', () => {
               .join('\n');
             rawTranscript.value = formatted;
             updateTranscriptStats();
-            showToast('✨ 本地 Whisper AI 已完成離線逐字稿轉錄！已自動標註發言人。', 4000);
-            }
-          } catch (e) {
-            console.warn('Auto offline transcribe notice:', e);
+            showToast('✨ 本地 Whisper AI 已完成離線高精度逐字稿轉錄！已自動替換瀏覽器粗稿。', 4000);
+          } else {
+            console.warn('Whisper transcription fallback to browser draft:', data?.error);
           }
-        } else {
-          showToast('錄音完成！音訊已自動備份，逐字稿已就緒！');
+        } catch (e) {
+          console.warn('Auto offline transcribe notice:', e);
         }
       };
 
