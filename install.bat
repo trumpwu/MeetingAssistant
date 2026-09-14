@@ -71,16 +71,20 @@ if not exist "%MODELS_DIR%\%MODEL_FILE%" (
 echo  核心 AI 模型 [%MODEL_FILE%] 就緒！
 echo.
 
-:: 4. 編譯與建立原生 Windows 桌面主程式 (.exe)
-echo [4/4] 正在封裝原生 Windows 桌面程式 (AI智慧會議助理.exe)...
+:: 4. 編譯與建立原生 Windows 桌面主程式 (.exe) 與訓練工具
+echo [4/4] 正在封裝原生 Windows 桌面程式與自動微調工具...
+if not exist "%APP_DIR%\TrainingData" mkdir "%APP_DIR%\TrainingData"
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:"%APP_DIR%\AI智慧會議助理.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "%APP_DIR%\Launcher.cs" >nul 2>&1
 copy /Y "%APP_DIR%\AI智慧會議助理.exe" "%USERPROFILE%\Desktop\AI智慧會議助理.exe" >nul
-echo  桌面原生執行檔已建立至：%USERPROFILE%\Desktop\AI智慧會議助理.exe
+copy /Y "%APP_DIR%\一鍵配對與模型訓練.bat" "%USERPROFILE%\Desktop\一鍵配對與模型訓練.bat" >nul
+echo  桌面主程式已建立至：%USERPROFILE%\Desktop\AI智慧會議助理.exe
+echo  自動微調工具已建立至：%USERPROFILE%\Desktop\一鍵配對與模型訓練.bat
 echo.
 
 echo ====================================================================
-echo   🎉 全自動原生桌面應用程式封裝完成！
-echo   現在可以直接在桌面雙擊【AI智慧會議助理.exe】立即開始使用！
+echo   🎉 全自動原生桌面應用程式與 AI 微調管線封裝完成！
+echo   1. 雙擊桌面【AI智慧會議助理.exe】立即開始使用會議助理！
+echo   2. 雙擊桌面【一鍵配對與模型訓練.bat】可自動配對微調數據！
 echo ====================================================================
 echo.
 pause

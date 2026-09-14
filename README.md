@@ -26,6 +26,12 @@
 ### 2. 啟動軟體
 雙擊桌面上的 **`AI智慧會議助理.exe`**，系統將自動以原生桌面視窗喚醒 AI 核心並秒開啟動。
 
+### 3. 🧠 AI 模型持續進化與微調 (Data Flywheel)
+1. 產出會議紀錄時，系統自動將初稿存於 `TrainingData/[主題]_(地端初稿).md`。
+2. 將線上滿意版本存為 `TrainingData/[主題]_(線上AI).md`。
+3. 雙擊執行 **`一鍵配對與模型訓練.bat`**，全自動生成 SFT 監督微調與 DPO 強化學習數據集！
+4. 詳見完整微調手冊：[`docs/AI_TRAINING_GUIDE.md`](docs/AI_TRAINING_GUIDE.md)。
+
 ---
 
 ## 📁 目錄結構
@@ -34,14 +40,18 @@
 D:\project\
 ├── MeetingAssistant\             # 前端介面、原生桌面執行檔與部署腳本
 │   ├── AI智慧會議助理.exe        # 🖥️ Windows 原生桌面一鍵主程式
+│   ├── 一鍵配對與模型訓練.bat    # 🧠 自動配對 SFT/DPO 數據集
+│   ├── TrainingData/             # 📁 訓練數據收集目錄 (地端初稿 vs 線上AI)
+│   ├── scripts/                  # 🛠️ 自動配對與表徵微調管線腳本
+│   ├── docs/AI_TRAINING_GUIDE.md # 📖 模型訓練與數據飛輪完整指南
 │   ├── Launcher.cs               # 原生 C# GUI 啟動器源碼
 │   ├── index.html / app.js       # 單頁極速介面 (即時同傳 & 會議提煉)
-│   ├── server.ts                 # 高效能 Deno 閘道伺服器
+│   ├── server.ts                 # 高效能 Deno 閘道伺服器 (Map-Reduce 引擎)
 │   ├── install.bat               # 全自動安裝、模型下載與封裝腳本
 │   └── push_to_github.bat        # GitHub 推送工具
-├── llama.cpp\                    # AVX2 本地極速 LLM 推論引擎
+├── llama.cpp\                    # AVX2 本地極速 LLM 推論與微調引擎
 ├── models\                       # 本地 AI 模型庫
-│   └── Qwen2.5-7B-Instruct-Q4_K_M.gguf (4.46 GB)
+│   └── qwen2.5-7b-instruct-q4_k_m.gguf
 └── Meetings\                     # 會議紀錄與逐字稿自動存檔目錄
 ```
 
