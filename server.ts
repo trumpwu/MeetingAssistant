@@ -74,8 +74,8 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       
       const buffer = new Uint8Array(await req.arrayBuffer());
       const ts = Date.now();
-      const inputPath = `${tempDir}\\upload_${ts}${ext}`;
-      const wavPath = `${tempDir}\\upload_${ts}.wav`;
+      const inputPath = `${tempDir}\\upload_${ts}_raw${ext}`;
+      const wavPath = `${tempDir}\\upload_${ts}_16k.wav`;
       const outPrefix = `${tempDir}\\upload_${ts}`;
       const txtPath = `${outPrefix}.txt`;
 
