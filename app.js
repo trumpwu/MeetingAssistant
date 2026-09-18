@@ -879,8 +879,23 @@ ${processedTranscript.slice(0, 32000)}`;
     let finalMd = '';
     if (aiGeneratedMinutes && aiGeneratedMinutes.length > 50) {
       finalMd = aiGeneratedMinutes;
+      showToast('✨ Qwen 2.5 AI 高管精華會議紀錄已提煉完成並自動存檔！');
     } else {
-      finalMd = generateFallbackMinutes(meetingDate, meetingTime, meetingLocation, meetingTitle, attendees, filename, processedTranscript);
+      showToast('⚠️ 本地 Qwen 2.5 AI 大腦未連線或逾時！請確認執行【AI智慧會議助理.bat】！', 7000);
+      finalMd = `# ⚠️ 【本地 Qwen 2.5 AI 尚未就緒】
+
+> **提示**：目前本機端 AI 推論引擎（Port 8080）未啟動或無法連線，因此無法執行 Map-Reduce 深度提煉。
+> 
+> **如何解決**：
+> 1. 請確認已透過專案目錄中的 **\`AI智慧會議助理.bat\`**（或執行 \`start_all.ps1\`）開啟程式。
+> 2. 確認黑色視窗提示「[1/4] Qwen 2.5 7B AI 大腦已在運行中」與「[2/4] 會議助理雙引擎伺服器已在運行中」。
+> 3. 回到本畫面重新點擊「一鍵產出深度重點會議紀錄」即可獲得高管級精華摘要！
+
+---
+
+## 📝 本次已記錄之逐字稿內容（已安全留存，絕無丟失）：
+
+${processedTranscript}`;
     }
 
     outputMarkdown.value = finalMd;
@@ -902,7 +917,6 @@ ${processedTranscript.slice(0, 32000)}`;
     }).catch(err => console.warn('Auto-save network error:', err));
 
     document.getElementById('output-section').scrollIntoView({ behavior: 'smooth' });
-    showToast('✨ Qwen 2.5 AI 會議紀錄已生成並自動存檔！');
   }
 
   function generateFallbackMinutes(meetingDate, meetingTime, meetingLocation, meetingTitle, attendees, filename, processedTranscript) {
