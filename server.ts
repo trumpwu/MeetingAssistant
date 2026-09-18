@@ -81,14 +81,38 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
       Deno.writeFileSync(inputPath, buffer);
 
-      // 1. Convert to 16kHz 16-bit Mono WAV via ffmpeg
-      const ffmpegCmd = new Deno.Command(ffmpeg, {
-        args: ["-y", "-i", inputPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath]
+      // 1. Slices audio into 120s chunks via FFmpeg (PCM 16kHz Mono)
+      const chunkDir = `${tempDir}\\upload_${ts}_chunks`;
+      try { Deno.mkdirSync(chunkDir, { recursive: true }); } catch (_) {}
+      const segmentPattern = `${chunkDir}\\chunk_%03d.wav`;
+
+      const sliceCmd = new Deno.Command(ffmpeg, {
+        args: [
+          "-y",
+          "-i", inputPath,
+          "-f", "segment",
+          "-segment_time", "120",
+          "-ar", "16000",
+          "-ac", "1",
+          "-c:a", "pcm_s16le",
+          segmentPattern
+        ]
       });
-      const ffOut = await ffmpegCmd.output();
-      if (ffOut.code !== 0) {
-        console.warn("FFmpeg transcode notice:", new TextDecoder().decode(ffOut.stderr));
+      const sliceOut = await sliceCmd.output();
+      if (sliceOut.code !== 0) {
+        console.warn("FFmpeg slice notice:", new TextDecoder().decode(sliceOut.stderr));
       }
+
+      // Collect chunk files
+      const chunkFiles: string[] = [];
+      try {
+        for (const entry of Deno.readDirSync(chunkDir)) {
+          if (entry.isFile && entry.name.startsWith("chunk_") && entry.name.endsWith(".wav")) {
+            chunkFiles.push(entry.name);
+          }
+        }
+        chunkFiles.sort();
+      } catch (_) {}
 
       // 2. Transcribe via requested engine: SenseVoice (Default / Chinese 50x) vs Whisper (Bilingual / English)
       const requestedEngine = (req.headers.get("X-Engine") || "sensevoice").toLowerCase();
@@ -96,69 +120,88 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       let transcript = "";
       let engineUsed = isWhisper ? "Whisper 10核心 (中英雙語)" : "SenseVoice (阿里開源 50x)";
 
-      if (isWhisper) {
-        console.log(`[Transcribe] Running Whisper Engine (AVX2 10-thread) on ${wavPath} ...`);
-        const whisper = new Deno.Command(whisperCli, {
-          args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", wavPath, "-otxt", "-of", outPrefix]
-        });
-        await whisper.output();
-        try {
-          transcript = Deno.readTextFileSync(txtPath).trim();
-        } catch (_) {
-          transcript = "";
-        }
-      } else {
-        // Alibaba SenseVoice: FunASR Nano int8 (50x ultra-fast Chinese STT)
-        console.log(`[Transcribe] Running Alibaba SenseVoice Engine on ${wavPath} ...`);
-        const senseVoice = new Deno.Command(senseVoiceCli, {
-          args: [
-            `--tokens=${senseVoiceTokens}`,
-            `--sense-voice-model=${senseVoiceModel}`,
-            "--sense-voice-language=auto",
-            "--sense-voice-use-itn=true",
-            "--num-threads=8",
-            wavPath
-          ]
-        });
-        const svOut = await senseVoice.output();
-        if (svOut.code === 0) {
-          const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
-          try {
-            for (const line of rawStdout.split("\n")) {
-              const trimmed = line.trim();
-              if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
-                const parsed = JSON.parse(trimmed);
-                if (parsed.text) {
-                  transcript = segmentSenseVoiceText(parsed);
-                  break;
+      if (chunkFiles.length > 0) {
+        console.log(`[Transcribe] 音訊分切為 ${chunkFiles.length} 片段，使用 ${engineUsed} 轉錄...`);
+        const segmentTexts: string[] = [];
+
+        for (let i = 0; i < chunkFiles.length; i++) {
+          const chunkName = chunkFiles[i];
+          const chunkPath = `${chunkDir}\\${chunkName}`;
+          const chunkPrefix = `${chunkDir}\\${chunkName.replace(".wav", "")}`;
+          const chunkTxt = `${chunkPrefix}.txt`;
+          const startSec = i * 120;
+          const startMin = Math.floor(startSec / 60);
+          const startSecRem = startSec % 60;
+          const timeLabel = chunkFiles.length > 1 ? `[${String(startMin).padStart(2, "0")}:${String(startSecRem).padStart(2, "0")}] ` : "";
+
+          let pieceText = "";
+
+          if (isWhisper) {
+            const whisper = new Deno.Command(whisperCli, {
+              args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", chunkPath, "-otxt", "-of", chunkPrefix]
+            });
+            await whisper.output();
+            try {
+              pieceText = Deno.readTextFileSync(chunkTxt).trim();
+            } catch (_) {
+              pieceText = "";
+            }
+          } else {
+            // Alibaba SenseVoice: FunASR Nano int8
+            const senseVoice = new Deno.Command(senseVoiceCli, {
+              args: [
+                `--tokens=${senseVoiceTokens}`,
+                `--sense-voice-model=${senseVoiceModel}`,
+                "--sense-voice-language=auto",
+                "--sense-voice-use-itn=true",
+                "--num-threads=8",
+                chunkPath
+              ]
+            });
+            const svOut = await senseVoice.output();
+            if (svOut.code === 0) {
+              const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
+              for (const line of rawStdout.split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
+                  try {
+                    const parsed = JSON.parse(trimmed);
+                    if (parsed.text) {
+                      pieceText = segmentSenseVoiceText(parsed);
+                      break;
+                    }
+                  } catch (_) {}
                 }
               }
             }
-          } catch (pe) {
-            console.warn("SenseVoice JSON parse notice:", pe);
+
+            // Fallback to Whisper for this chunk if SenseVoice yielded empty
+            if (!pieceText) {
+              const whisper = new Deno.Command(whisperCli, {
+                args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", chunkPath, "-otxt", "-of", chunkPrefix]
+              });
+              await whisper.output();
+              try {
+                pieceText = Deno.readTextFileSync(chunkTxt).trim();
+              } catch (_) {}
+            }
           }
+
+          if (pieceText) {
+            segmentTexts.push(`${timeLabel}${pieceText}`);
+          }
+
+          // Clean chunk file
+          try { Deno.removeSync(chunkPath); } catch (_) {}
+          try { Deno.removeSync(chunkTxt); } catch (_) {}
         }
 
-        // Automatic fallback to Whisper if SenseVoice produced no text
-        if (!transcript) {
-          console.log("[Transcribe] SenseVoice yielded empty, activating Whisper fallback ...");
-          const whisper = new Deno.Command(whisperCli, {
-            args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", wavPath, "-otxt", "-of", outPrefix]
-          });
-          await whisper.output();
-          try {
-            transcript = Deno.readTextFileSync(txtPath).trim();
-            engineUsed = "Whisper (自動容錯備用)";
-          } catch (_) {
-            transcript = "";
-          }
-        }
+        transcript = segmentTexts.join("\n\n");
       }
 
-      // Cleanup temp files
+      // Cleanup chunk dir and input path
+      try { Deno.removeSync(chunkDir, { recursive: true }); } catch (_) {}
       try { Deno.removeSync(inputPath); } catch (_) {}
-      try { Deno.removeSync(wavPath); } catch (_) {}
-      try { Deno.removeSync(txtPath); } catch (_) {}
 
       // Convert to 100% Traditional Chinese (Taiwan Standard)
       if (transcript) {
