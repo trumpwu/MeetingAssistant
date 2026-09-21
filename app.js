@@ -857,9 +857,9 @@ ${processedTranscript.slice(0, 32000)}`;
             }
           ],
           temperature: 0.1,
-          presence_penalty: 0.8,
-          frequency_penalty: 0.8,
-          max_tokens: 1500
+          presence_penalty: 0.0,
+          frequency_penalty: 0.0,
+          max_tokens: 2048
         })
       });
 
