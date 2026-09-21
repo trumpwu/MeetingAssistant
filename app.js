@@ -381,7 +381,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTranscriptStats();
               });
             } else {
-              // Chinese Mode - Preview in status bar only, keep rawTranscript pristine for Whisper
+              // Chinese Mode - Immediately print formatted subtitles into rawTranscript!
+              const formattedLine = `[${nowTime}] [${spkTag}]: ${finalRaw}`;
+              rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
+              rawTranscript.scrollTop = rawTranscript.scrollHeight;
+              updateTranscriptStats();
               liveStreamText.textContent = `🎙️ [${spkTag}]: ${finalRaw}`;
             }
 
@@ -558,9 +562,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x vs Whisper)
         const currentEngine = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'whisper' : 'sensevoice';
         const engineLabel = currentEngine === 'sensevoice' ? '阿里 SenseVoice (50x 極速繁中)' : 'Whisper 10核心 (中英雙語)';
-        rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在全力進行離線轉錄中，請稍候...`;
+        const existingLive = rawTranscript.value.trim();
+        if (!existingLive) {
+          rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在全力進行離線轉錄中，請稍候...`;
+        }
         updateTranscriptStats();
-        showToast(`🎙️ 本地端 ${engineLabel} 正在轉錄音訊中...`, 6000);
+        showToast(`🎙️ 錄音結束，本地端 ${engineLabel} 正在進行高精度轉錄校準...`, 5000);
 
         try {
           const t0 = Date.now();
@@ -612,7 +619,17 @@ document.addEventListener('DOMContentLoaded', () => {
       // Start Speech Recognizer with configured language
       if (speechRecognizer) {
         speechRecognizer.lang = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'en-US' : 'zh-TW';
-        try { speechRecognizer.start(); } catch (e) {}
+        try { speechRecognizer.abort(); } catch (_) {}
+        setTimeout(() => {
+          try {
+            speechRecognizer.start();
+          } catch (e) {
+            console.warn('Speech recognition immediate start notice:', e);
+            setTimeout(() => {
+              try { speechRecognizer.start(); } catch (_) {}
+            }, 250);
+          }
+        }, 50);
       }
 
       // UI States
