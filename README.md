@@ -27,10 +27,13 @@
 雙擊桌面上的 **`AI智慧會議助理.exe`**，系統將自動以原生桌面視窗喚醒 AI 核心並秒開啟動。
 
 ### 3. 🧠 AI 模型持續進化與微調 (Data Flywheel)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TrumpWu/MeetingAssistant/blob/main/scripts/train_qwen_lora.ipynb)
+
 1. 產出會議紀錄時，系統自動將初稿存於 `TrainingData/[主題]_(地端初稿).md`。
 2. 將線上滿意版本存為 `TrainingData/[主題]_(線上AI).md`。
 3. 雙擊執行 **`一鍵配對與模型訓練.bat`**，全自動生成 SFT 監督微調與 DPO 強化學習數據集！
-4. 詳見完整微調手冊：[`docs/AI_TRAINING_GUIDE.md`](docs/AI_TRAINING_GUIDE.md)。
+4. 點擊上方 **Open in Colab** 徽章，免費使用 Google T4 GPU 於 8 分鐘內完成 LoRA 微調並一鍵下載 `.gguf`！
+5. 詳見完整微調手冊：[`docs/AI_TRAINING_GUIDE.md`](docs/AI_TRAINING_GUIDE.md)。
 
 ---
 
