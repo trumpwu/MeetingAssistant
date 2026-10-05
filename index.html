@@ -22,8 +22,8 @@
         <div class="engine-select-group">
           <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 語音模式：</label>
           <select id="engine-mode-select" class="engine-select">
-            <option value="sensevoice" selected>🇹🇼 純中文極速 (阿里 SenseVoice 50x)</option>
-            <option value="whisper">🌐 中英雙語/同傳 (Whisper 10核心)</option>
+            <option value="sensevoice" selected>🇹🇼 SenseVoice 50x + Qwen 2.5 雙層校準 (推薦)</option>
+            <option value="sensevoice_fast">⚡ SenseVoice 極速原生 (免後處理)</option>
           </select>
         </div>
 
@@ -96,6 +96,18 @@
             <div class="form-group">
               <label id="label-attendees" for="meeting-attendees">出席人員 / 記錄者</label>
               <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：王專案經理、原廠講師、專案團隊">
+            </div>
+
+            <div class="form-group">
+              <label id="label-scenario" for="meeting-scenario">🎯 會議情境模式 (借鑑 JT-Whisper 自動感知)</label>
+              <select id="meeting-scenario" class="form-control">
+                <option value="auto" selected>✨ 自動情境識別 (根據逐字稿對話動態判斷，推薦)</option>
+                <option value="weekly">🏢 內部常態週會 / 營運進度列管 (同仁進度、活動聚會、行政待辦)</option>
+                <option value="tech">💻 研發技術架構 / 系統審查對齊 (系統選型、API、測試除錯、資安)</option>
+                <option value="engineering">⚡ 案場工程交付 / 硬體裝機驗收 (合約審查、配電圖、工期排程)</option>
+                <option value="business">🤝 商務合作洽談 / 客戶需求對齊 (商業模式、合約條款、收費交付)</option>
+                <option value="exhibition">🎪 公眾展會 / 大型對外活動籌備 (僅在確為展覽宣傳時選用)</option>
+              </select>
             </div>
 
             <!-- Auto-Generated File Name -->

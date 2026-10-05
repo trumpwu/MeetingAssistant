@@ -535,16 +535,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const currentFilename = autoFilenameInput ? autoFilenameInput.value.trim() : `Recording_${Date.now()}`;
         
-        // 1. Auto-persist audio to disk with emergency browser fallback
+        // 1. Auto-persist audio to dedicated meeting folder
+        const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
         try {
           const saveRes = await fetch('/api/save-audio', {
             method: 'POST',
-            headers: { 'X-Filename': encodeURIComponent(currentFilename) },
+            headers: {
+              'X-Filename': encodeURIComponent(currentFilename),
+              'X-Custom-Dir': encodeURIComponent(targetDir)
+            },
             body: recordedBlob
           });
           const saveData = await saveRes.json();
           if (saveData.success) {
-            console.log('Audio saved successfully to:', saveData.path);
+            console.log('Audio saved successfully to meeting folder:', saveData.path);
           } else {
             throw new Error(saveData.error || 'Server save failed');
           }
@@ -559,15 +563,15 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
         }
 
-        // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x vs Whisper)
-        const currentEngine = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'whisper' : 'sensevoice';
-        const engineLabel = currentEngine === 'sensevoice' ? '阿里 SenseVoice (50x 極速繁中)' : 'Whisper 10核心 (中英雙語)';
+        // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x + Qwen 2.5 Two-Stage Calibration)
+        const currentEngine = (engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice';
+        const engineLabel = currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準';
         const existingLive = rawTranscript.value.trim();
         if (!existingLive) {
-          rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在全力進行離線轉錄中，請稍候...`;
+          rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在進行智慧轉錄與實體校準中，請稍候...`;
         }
         updateTranscriptStats();
-        showToast(`🎙️ 錄音結束，本地端 ${engineLabel} 正在進行高精度轉錄校準...`, 5000);
+        showToast(`🎙️ 錄音結束，本地端 ${engineLabel} 正在進行轉錄校準...`, 5000);
 
         try {
           const t0 = Date.now();
@@ -600,7 +604,25 @@ document.addEventListener('DOMContentLoaded', () => {
               .join('\n');
             rawTranscript.value = formatted;
             updateTranscriptStats();
-            showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！請點擊「一鍵產出重點會議紀錄」。`, 5000);
+
+            // Auto-save transcript into meeting folder
+            const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
+            fetch('/api/auto-save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: transcriptFilename,
+                content: formatted,
+                type: 'transcript',
+                customDir: targetDir
+              })
+            }).then(r => r.json()).then(saveResult => {
+              if (saveResult.folder) {
+                console.log('Transcript auto-saved to folder:', saveResult.folder);
+              }
+            }).catch(err => console.warn('Transcript auto-save error:', err));
+
+            showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！逐字稿已自動歸檔。`, 5000);
           } else {
             rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
             showToast(`⚠️ 轉錄提示: ${data?.error || '未能辨識出清晰人聲'}`, 5000);
@@ -818,6 +840,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const meetingTitle = titleInput.value.trim() || '專案重點會議';
     const attendees = attendeesInput.value.trim() || '全體與會人員';
     const filename = `${autoFilenameInput.value}.md`;
+    const scenarioInput = document.getElementById('meeting-scenario');
+    const meetingScenario = scenarioInput ? scenarioInput.value : 'auto';
 
     // 1. Replace Speaker Tags with Actual Names (Robust Regex)
     applySpeakerMappingToTranscript();
@@ -831,29 +855,43 @@ document.addEventListener('DOMContentLoaded', () => {
     let aiGeneratedMinutes = '';
 
     try {
+      const scenarioTitles = {
+        auto: '動態情境自適應',
+        weekly: '內部常態週會 / 營運進度列管',
+        tech: '研發技術架構 / 系統審查對齊',
+        engineering: '案場工程交付 / 硬體裝機驗收',
+        business: '商務合作洽談 / 客戶需求對齊',
+        exhibition: '公眾展會 / 大型對外活動籌備'
+      };
+      const currentScenarioName = scenarioTitles[meetingScenario] || '通用會議情境';
+
       const aiPrompt = `你是一個專業的繁體中文高階主管會議記錄特助。請根據以下逐字稿，以【極簡高管版（長度簡短精煉、1頁內讀完、直切核心決策）】整理成以下標準 Markdown 結構：
 
-【嚴格事實接地規範 (Grounding)】：
-所有決策、發言人、技術數據與待辦事項，必須 100% 來自本次會議逐字稿的真實對話！嚴禁捏造、幻覺或帶入未提及的人名（如無提及嚴禁帶入無關人名）或未提及的無關數據！
+【會議情境設定】：${currentScenarioName}
+
+【嚴格事實接地規範 (Grounding & Anti-Hallucination)】：
+1. 所有決策、發言人、技術數據與待辦事項，必須 100% 來自本次會議逐字稿的真實對話！嚴禁捏造、幻覺或帶入未提及的人名（如無提及嚴禁帶入無關英文名）或無關數據！
+2. 每一項核心決策、關鍵規格、待辦事項末尾，請盡可能標註對應之逐字稿時間出處標記（如 [05:20] 或 [12:30]），以便核實！
+3. 若非明確公眾展覽，絕對嚴禁將內部聚會（如飯店聚餐）、工作排程或專案採購臆測為展覽或攤位承攬！
 
 # 📋 ${meetingTitle} - 精華重點會議紀錄
 > **會議日期**：${meetingDate} | **地點**：${meetingLocation} | **出席人員**：${attendees}
 
 ## 🎯 一、30秒核心決策與共識 (Key Decisions)
-（精簡列出本場會議最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現）
+（精簡列出本場會議最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現，末尾附時間戳如 [05:20]）
 
 ## 📊 二、關鍵數據與規格指標 (Key Metrics)
-| 項目 | 關鍵數值 / 規格 | 說明結論 |
-| :--- | :---: | :--- |
-（僅列出本次對話中實際提及的 3~4 項核心數值、型號或電流/功率，無則省略）
+| 項目 | 關鍵數值 / 規格 | 實務說明與場域 | 時間出處 |
+| :--- | :---: | :--- | :---: |
+（僅列出本次對話中實際提及的 3~4 項核心數值、型號或工程參數，無則省略）
 
 ## ✅ 三、行動追蹤矩陣 (Action Matrix)
-| 項次 | 具體待辦事項 | 優先級 | 負責人 | 完成時程 |
-| :---: | :--- | :---: | :---: | :---: |
+| 項次 | 具體待辦事項 | 優先級 | 負責人 | 完成時程 | 時間出處 |
+| :---: | :--- | :---: | :---: | :---: | :---: |
 （僅列出最核心的 3~5 項具體任務，優先級標註 [🔥最高]、[⚡高優先] 或 [📌中優先]，負責人請對齊真實發言或與會者）
 
 ## ⚠️ 四、重點風險與下一步 (Next Steps)
-（1~2 點本次會議提及之實際風險與下步行動）
+（1~2 點本次會議提及之實際風險與下步行動，附時間出處）
 
 會議逐字稿：
 ${processedTranscript.slice(0, 32000)}`;
@@ -863,6 +901,7 @@ ${processedTranscript.slice(0, 32000)}`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'qwen2.5-7b-instruct',
+          scenario: meetingScenario,
           messages: [
             {
               role: 'system',
@@ -918,7 +957,7 @@ ${processedTranscript}`;
     outputMarkdown.value = finalMd;
     renderMarkdownView(finalMd);
 
-    // Auto-Save to Target Folder + Desktop
+    // Auto-Save to Target Meeting Subfolder
     const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
     fetch('/api/auto-save', {
       method: 'POST',
@@ -931,6 +970,9 @@ ${processedTranscript}`;
       })
     }).then(res => res.json()).then(data => {
       console.log('Auto-saved:', data);
+      if (data && data.folder) {
+        showToast(`📁 會議紀錄已自動歸檔至專屬資料夾：${data.folder}`, 4000);
+      }
     }).catch(err => console.warn('Auto-save network error:', err));
 
     document.getElementById('output-section').scrollIntoView({ behavior: 'smooth' });
@@ -1049,7 +1091,30 @@ ${processedTranscript}`;
       .replace(/`([^`]+)`/gim, '<code>$1</code>')
       .replace(/```text([\s\S]*?)```/gim, '<pre><code>$1</code></pre>')
       .replace(/^\* (.*$)/gim, '<li>$1</li>')
-      .replace(/^\d+\.\s+(.*$)/gim, '<li>$1</li>');
+      .replace(/^\d+\.\s+(.*$)/gim, '<li>$1</li>')
+      .replace(/\[(\d{1,2}:\d{2}(?:\s*-\s*\d{1,2}:\d{2})?)\]/g, '<span class="ts-badge" data-time="$1" title="點擊定位至逐字稿此時間點">⏱️ $1</span>');
+
+    // Attach click events to clickable timestamp badges (JT-Whisper style)
+    outputRendered.querySelectorAll('.ts-badge').forEach(badge => {
+      badge.addEventListener('click', () => {
+        const timeTag = badge.dataset.time || '';
+        if (!timeTag) return;
+        const text = rawTranscript.value;
+        const targetToken = `[${timeTag.split('-')[0].trim()}`;
+        const idx = text.indexOf(targetToken);
+        if (idx !== -1) {
+          rawTranscript.focus();
+          rawTranscript.setSelectionRange(idx, idx + targetToken.length + 1);
+          const fullHeight = rawTranscript.scrollHeight;
+          const posRatio = idx / text.length;
+          rawTranscript.scrollTop = fullHeight * posRatio - 60;
+          showToast(`⏱️ 已自動跳轉定位至逐字稿時間點 [${timeTag}]！`);
+          rawTranscript.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          showToast(`⏱️ 逐字稿時間錨點：[${timeTag}]`);
+        }
+      });
+    });
   }
 
   generateSummaryBtn.addEventListener('click', generateMeetingMinutes);

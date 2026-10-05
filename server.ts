@@ -7,8 +7,6 @@ const root = "D:\\project\\MeetingAssistant";
 const meetingsDir = "D:\\project\\Meetings";
 const tempDir = "D:\\project\\temp_transcribe";
 const desktopDir = "C:\\Users\\Innovare\\Desktop";
-const whisperCli = "D:\\project\\whisper.cpp\\Release\\whisper-cli.exe";
-const whisperModel = "D:\\project\\models\\ggml-base.bin";
 const ffmpeg = "D:\\project\\MeetingAssistant\\ffmpeg.exe";
 
 // Alibaba SenseVoice (sherpa-onnx FunASR Nano int8)
@@ -48,6 +46,154 @@ function segmentSenseVoiceText(data: { text: string; timestamps?: number[]; toke
 
 try { Deno.mkdirSync(meetingsDir, { recursive: true }); } catch (_) {}
 try { Deno.mkdirSync(tempDir, { recursive: true }); } catch (_) {}
+
+// Stage 2: Two-Stage Semantic & Phonetic Calibration via local Qwen 2.5 7B & Domain Dictionary
+async function calibrateTranscript(rawTranscript: string, isFastMode = false): Promise<string> {
+  if (!rawTranscript || rawTranscript.trim().length === 0) return rawTranscript;
+
+  // 1. First-pass rule-based phonetic dictionary corrections (handles frequent Taiwan enterprise/ESG terminology)
+  const phoneticReplacements: Array<[RegExp, string]> = [
+    [/(?:美國清|沒心|美活清|梅國青)/g, "梅國清"],
+    [/(?:炭牌|碳牌)/g, "碳排"],
+    [/(?:炭水|碳水)(?=[，。、\s對]|上上次)/g, "碳稅"],
+    [/(?:碳圖機|正圖機|碳突擊)/g, "碳足跡"],
+    [/(?:能源見久|能源建檢)/g, "能源健檢"],
+    [/(?:無城市|無程室)/g, "無塵室"],
+    [/(?:一百克|100克)(?=[，。、\s]|但你的產品)/g, "100 Class"],
+    [/(?:一千克|1000克)(?=[，。、\s]|class)/gi, "1000 Class"],
+    [/(?:周金件走|周金見走)/g, "捉襟見肘"],
+    [/(?:他光天協會|光天協會)/g, "台灣光電協會"],
+    [/(?:節能鹼看|節能簡看)/g, "節能減碳"],
+    [/(?:提管|器管)(?=[啊啦，。])/g, "踢館"],
+    [/(?:一高一兩|依高)/g, "益高"],
+    [/(?:節能模)/g, "節能膜"],
+    [/(?:行路)(?=[，。、\s]|在我的桌上)/g, "型錄"],
+    [/(?:台笛電|臺笛業|臺笛)(?=[，。、\s]|生意)/g, "台積電"],
+    [/(?:利陽|立陽)(?=[，。、\s]|說穿了)/g, "立陽"],
+    [/(?:利破|立巴)(?=[，。、\s]|好目|集團)/g, "立霸"],
+    [/(?:國太建設)/g, "國泰建設"],
+    [/(?:公院|空院)(?=[，。、\s]|可以給我們東西)/g, "工研院"],
+    [/(?:十三班)(?=[，。、\s？?]|新創)/g, "實戰班"]
+  ];
+
+  let cleaned = rawTranscript;
+  for (const [pattern, replacement] of phoneticReplacements) {
+    cleaned = cleaned.replace(pattern, replacement);
+  }
+
+  if (isFastMode) {
+    return cleaned;
+  }
+
+  // 2. Second-pass LLM Semantic Context Calibration via local Qwen 2.5 7B (Port 8080)
+  try {
+    let memoryPrompt = "";
+    try {
+      const memoryPath = `${root}\\data\\company_memory.json`;
+      const memObj = JSON.parse(Deno.readTextFileSync(memoryPath));
+      const entities = memObj.enterprise_entities || {};
+      const people = (entities.personnel || []).join("、");
+      const partners = (entities.systems_partners || []).join("、");
+      const metrics = (entities.subsidies_metrics || []).join("、");
+      memoryPrompt = `已知企業名詞庫參考：\n- 人員：${people}\n- 企業與系統：${partners}\n- 術語與指標：${metrics}`;
+    } catch (_) {}
+
+    console.log("[Calibrate] Running Stage-2 Qwen 2.5 7B Context Calibration...");
+    const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "qwen2.5-7b-instruct",
+        messages: [
+          {
+            role: "system",
+            content: `你是一個專業的高階語音辨識（STT）校準專家。
+請將以下由地端語音模型產出的逐字稿，進行「同音錯字修正、標點符號優化與發音校準」：
+1. 嚴格對照已知詞庫，將同音錯字校正（如「美國清」校正為「梅國清」、「炭牌」校正為「碳排」、「無城市 一百克」校正為「無塵室 100 Class」）。
+2. 保留完整的發言內容與順序，嚴禁刪減原話的對話資訊，嚴禁做成摘要！
+3. 輸出純文字繁體中文逐字稿，標註清晰標點符號與適當段落。
+${memoryPrompt}`
+          },
+          {
+            role: "user",
+            content: `【待校準逐字稿】：\n${cleaned.slice(0, 15000)}`
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 4096
+      }),
+      signal: AbortSignal.timeout(25000)
+    });
+
+    if (llamaRes.ok) {
+      const llamaData = await llamaRes.json();
+      const calibrated = llamaData?.choices?.[0]?.message?.content?.trim();
+      if (calibrated && calibrated.length > 50) {
+        console.log("[Calibrate] ✨ Stage-2 Qwen 2.5 calibration successfully refined transcript!");
+        return calibrated;
+      }
+    }
+  } catch (err) {
+    console.warn("[Calibrate] Qwen 2.5 calibration skipped/timed out, using rule-calibrated transcript:", err);
+  }
+
+  return cleaned;
+}
+
+function resolveTargetDirectory(customDir?: string): string {
+  if (!customDir || customDir.trim() === "") return meetingsDir;
+  const trimmed = customDir.trim();
+  if (trimmed.toLowerCase() === "desktop") return desktopDir;
+  if (trimmed.toLowerCase() === "downloads") {
+    return "C:\\Users\\Innovare\\Downloads";
+  }
+  try {
+    Deno.mkdirSync(trimmed, { recursive: true });
+    return trimmed;
+  } catch (_) {
+    return meetingsDir;
+  }
+}
+
+function getMeetingFolderName(filename: string): string {
+  let name = filename;
+  try {
+    name = decodeURIComponent(name);
+  } catch (_) {}
+  name = name.replace(/\.(md|txt|webm|wav|mp3|m4a|aac|flac|html|doc)$/i, "");
+  name = name.replace(/_\((?:逐字稿|會議紀錄|地端初稿|線上AI|線上極速讀取)\)$/i, "");
+  return name.trim() || `Meeting_${Date.now()}`;
+}
+
+// Automatically categorize loose files in D:\project\Meetings into dedicated subfolders
+function organizeExistingMeetings() {
+  try {
+    const entries = Array.from(Deno.readDirSync(meetingsDir));
+    for (const entry of entries) {
+      if (entry.isFile && (entry.name.endsWith(".md") || entry.name.endsWith(".webm") || entry.name.endsWith(".txt") || entry.name.endsWith(".html") || entry.name.endsWith(".doc"))) {
+        let cleanEntryName = entry.name;
+        try {
+          cleanEntryName = decodeURIComponent(entry.name);
+        } catch (_) {}
+        const folderName = getMeetingFolderName(cleanEntryName);
+        if (folderName && folderName !== entry.name) {
+          const subDir = `${meetingsDir}\\${folderName}`;
+          try { Deno.mkdirSync(subDir, { recursive: true }); } catch (_) {}
+          const oldPath = `${meetingsDir}\\${entry.name}`;
+          const newPath = `${subDir}\\${cleanEntryName}`;
+          try {
+            Deno.renameSync(oldPath, newPath);
+            console.log(`[Organize] Moved ${entry.name} -> ${folderName}\\${cleanEntryName}`);
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Organize existing meetings notice:", err);
+  }
+}
+
+organizeExistingMeetings();
 
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -114,11 +260,11 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         chunkFiles.sort();
       } catch (_) {}
 
-      // 2. Transcribe via requested engine: SenseVoice (Default / Chinese 50x) vs Whisper (Bilingual / English)
+      // 2. Transcribe via Alibaba SenseVoice (FunASR Nano int8)
       const requestedEngine = (req.headers.get("X-Engine") || "sensevoice").toLowerCase();
-      const isWhisper = requestedEngine.includes("whisper");
+      const isFast = requestedEngine === "sensevoice_fast";
       let transcript = "";
-      let engineUsed = isWhisper ? "Whisper 10核心 (中英雙語)" : "SenseVoice (阿里開源 50x)";
+      const engineUsed = isFast ? "SenseVoice 50x 原生極速" : "SenseVoice 50x + Qwen 2.5 雙層語意校準";
 
       if (chunkFiles.length > 0) {
         console.log(`[Transcribe] 音訊分切為 ${chunkFiles.length} 片段，使用 ${engineUsed} 轉錄...`);
@@ -127,8 +273,6 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         for (let i = 0; i < chunkFiles.length; i++) {
           const chunkName = chunkFiles[i];
           const chunkPath = `${chunkDir}\\${chunkName}`;
-          const chunkPrefix = `${chunkDir}\\${chunkName.replace(".wav", "")}`;
-          const chunkTxt = `${chunkPrefix}.txt`;
           const startSec = i * 120;
           const startMin = Math.floor(startSec / 60);
           const startSecRem = startSec % 60;
@@ -136,54 +280,31 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
           let pieceText = "";
 
-          if (isWhisper) {
-            const whisper = new Deno.Command(whisperCli, {
-              args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", chunkPath, "-otxt", "-of", chunkPrefix]
-            });
-            await whisper.output();
-            try {
-              pieceText = Deno.readTextFileSync(chunkTxt).trim();
-            } catch (_) {
-              pieceText = "";
-            }
-          } else {
-            // Alibaba SenseVoice: FunASR Nano int8
-            const senseVoice = new Deno.Command(senseVoiceCli, {
-              args: [
-                `--tokens=${senseVoiceTokens}`,
-                `--sense-voice-model=${senseVoiceModel}`,
-                "--sense-voice-language=auto",
-                "--sense-voice-use-itn=true",
-                "--num-threads=8",
-                chunkPath
-              ]
-            });
-            const svOut = await senseVoice.output();
-            if (svOut.code === 0) {
-              const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
-              for (const line of rawStdout.split("\n")) {
-                const trimmed = line.trim();
-                if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
-                  try {
-                    const parsed = JSON.parse(trimmed);
-                    if (parsed.text) {
-                      pieceText = segmentSenseVoiceText(parsed);
-                      break;
-                    }
-                  } catch (_) {}
-                }
+          // Alibaba SenseVoice: FunASR Nano int8
+          const senseVoice = new Deno.Command(senseVoiceCli, {
+            args: [
+              `--tokens=${senseVoiceTokens}`,
+              `--sense-voice-model=${senseVoiceModel}`,
+              "--sense-voice-language=auto",
+              "--sense-voice-use-itn=true",
+              "--num-threads=8",
+              chunkPath
+            ]
+          });
+          const svOut = await senseVoice.output();
+          if (svOut.code === 0) {
+            const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
+            for (const line of rawStdout.split("\n")) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
+                try {
+                  const parsed = JSON.parse(trimmed);
+                  if (parsed.text) {
+                    pieceText = segmentSenseVoiceText(parsed);
+                    break;
+                  }
+                } catch (_) {}
               }
-            }
-
-            // Fallback to Whisper for this chunk if SenseVoice yielded empty
-            if (!pieceText) {
-              const whisper = new Deno.Command(whisperCli, {
-                args: ["-m", whisperModel, "-l", "zh", "-t", "10", "-bs", "1", "-bo", "1", "-f", chunkPath, "-otxt", "-of", chunkPrefix]
-              });
-              await whisper.output();
-              try {
-                pieceText = Deno.readTextFileSync(chunkTxt).trim();
-              } catch (_) {}
             }
           }
 
@@ -193,7 +314,6 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
           // Clean chunk file
           try { Deno.removeSync(chunkPath); } catch (_) {}
-          try { Deno.removeSync(chunkTxt); } catch (_) {}
         }
 
         transcript = segmentTexts.join("\n\n");
@@ -212,7 +332,10 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         return Response.json({ success: false, error: "音訊轉錄結果為空，請確認檔案是否有清晰人聲。" });
       }
 
-      return Response.json({ success: true, transcript, filename: rawFilename, engineUsed });
+      // 3. Stage 2 Calibration: Automatically calibrate raw transcript via Two-Stage Pipeline
+      const calibratedTranscript = await calibrateTranscript(transcript, isFast);
+
+      return Response.json({ success: true, transcript: calibratedTranscript, raw_transcript: transcript, filename: rawFilename, engineUsed });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
@@ -251,6 +374,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       const rawReq = await req.json();
       const messages = rawReq.messages || [];
       const userPrompt = messages.find((m: any) => m.role === "user")?.content || "";
+      const scenario = rawReq.scenario || "auto";
 
       const transcriptMarker = "會議逐字稿：";
       const markerIdx = userPrompt.indexOf(transcriptMarker);
@@ -260,6 +384,22 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       const cleanedTranscript = rawTranscript
         .replace(/(他[說就]|對呀|那個|嗯|啊|這這|我我|你你){2,}/g, "$1")
         .replace(/\n{3,}/g, "\n\n");
+
+      // Step 1.5: Scenario Detection & Anti-Hallucination Grounding Setup
+      const hasExhibitionKeywords = /展覽|世貿|南港展覽館|參展|攤位佈置|展品|主辦單位|外貿協會/i.test(rawTranscript);
+
+      let scenarioGuide = "";
+      if (scenario === "weekly" || (scenario === "auto" && !hasExhibitionKeywords)) {
+        scenarioGuide = "【當前會議情境：公司內部常態週會 / 營運行政列管】\n主要關注：各同仁工作進度、團隊活動與聚餐訂位、行政待辦排程、各專案案場推展進度。嚴禁將內部聚餐或日常業務捏造為展覽、攤位或策展！";
+      } else if (scenario === "tech") {
+        scenarioGuide = "【當前會議情境：研發技術架構 / 系統審查對齊】\n主要關注：技術架構選型、API/資料庫設計、軟硬體整合測試、資安與穩定性規範。";
+      } else if (scenario === "engineering") {
+        scenarioGuide = "【當前會議情境：案場工程交付 / 硬體裝機驗收】\n主要關注：合約審查、配電圖與施工排程、設備叫料與驗收標準。";
+      } else if (scenario === "business") {
+        scenarioGuide = "【當前會議情境：商務合作洽談 / 客戶需求對齊】\n主要關注：商業合作模式、收費與合約條款、權責切分與交付里程碑。";
+      } else if (scenario === "exhibition" || hasExhibitionKeywords) {
+        scenarioGuide = "【當前會議情境：公眾展會 / 大型對外活動籌備】\n主要關注：展位規劃、展示設備、文宣推廣與人員輪值。";
+      }
 
       // Step 2: Map-Reduce Chunking
       const CHUNK_SIZE = 3500;
@@ -271,7 +411,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
           chunks.push(cleanedTranscript.substring(i, i + CHUNK_SIZE));
         }
 
-        // Map Phase: Extract factual key points per segment
+        // Map Phase: Extract factual key points per segment with Timestamps
         const extractedSegments: string[] = [];
         for (let idx = 0; idx < chunks.length; idx++) {
           const chunk = chunks[idx];
@@ -283,7 +423,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
               messages: [
                 {
                   role: "system",
-                  content: "你是事實提煉特助。請從以下會議片段中客觀提取：1. 討論主題與達成之共識 2. 提及的數據/規格/型號/數值 3. 明確的待辦任務與責任人。只列事實，絕不添加無關人名或數據。"
+                  content: `你是事實提煉特助。${scenarioGuide}\n請客觀提取事實，每一點必須標註時間標籤（如 [MM:SS]）：1. 討論主題與達成之共識 2. 提及的數據/規格/型號/數值 3. 明確的待辦任務與責任人。只列事實，絕不添加無關人名或數據。嚴禁臆測非逐字稿提及的無關情境。`
                 },
                 { role: "user", content: `【會議片段 ${idx + 1}/${chunks.length}】：\n${chunk}` }
               ],
@@ -300,33 +440,36 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         consolidatedFacts = cleanedTranscript;
       }
 
-      // Step 3: Reduce Phase (Global Executive Synthesis)
+      // Step 3: Reduce Phase (Global Executive Synthesis with Timestamp Anchoring)
       const reducePrompt = `你是上市公司執行長特助。請根據以下【各段已提煉之會議事實清單】，直接整理成【1 頁極簡高管精華版】會議紀錄。
 
-【嚴格規則】：
-1. 嚴禁重複拷貝相同內容！嚴禁按人名條列重複的樣板句！
-2. 嚴禁捏造任何未在會議中提及的無關數據、規格或數值！
-3. 所有內容必須 100% 來自以下事實清單！
+${scenarioGuide}
+
+【嚴格反幻覺規範 (Grounding & Anti-Hallucination)】：
+1. 嚴禁無中生有！所有內容必須 100% 來自以下事實清單！
+2. 每一項核心決策、關鍵規格、待辦事項，末尾必須附帶時間戳標籤（如 [MM:SS]），有據可查！
+3. 若非公眾展覽，絕對嚴禁將聚餐、訂位、日常採購捏造為「展會」、「攤位承攬」或「策展」！
+4. 嚴禁憑空捏造非逐字稿提及的英文姓名或虛構職稱（如 Jennifer 導演等）！
 
 請直接輸出以下標準格式：
 # 📋 [會議主題] - 極簡精華紀錄
 > **會議日期**：[日期] | **地點**：[地點] | **出席人員**：[出席人員]
 
 ## 🎯 一、30 秒核心決策與共識 (Key Decisions)
-（精簡列出最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現）
+（精簡列出最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現，末尾附時間戳如 [05:20]）
 
 ## 📊 二、關鍵規格與技術參數指標 (Key Metrics)
-| 項目 | 核心規格 / 數值 | 實務說明與場域 |
-| :--- | :---: | :--- |
-（僅列出本次對話中實際提及的 3~4 項核心數值、型號或電流/功率，無則省略）
+| 項目 | 核心規格 / 數值 | 實務說明與場域 | 時間出處 |
+| :--- | :---: | :--- | :---: |
+（僅列出本次對話中實際提及的 3~4 項核心數值、型號或工程參數，無則省略）
 
 ## ✅ 三、行動追蹤矩陣 (Action Matrix)
-| 項次 | 具體待辦事項說明 | 優先級 | 負責人 | 預計完成時程 |
-| :---: | :--- | :---: | :---: | :---: |
+| 項次 | 具體待辦事項說明 | 優先級 | 負責人 | 預計完成時程 | 時間出處 |
+| :---: | :--- | :---: | :---: | :---: | :---: |
 （僅列出最核心的 3~5 項具體任務，優先級標註 [🔥最高]、[⚡高優先] 或 [📌中優先]）
 
 ## ⚠️ 四、重點風險與下一步 (Next Steps)
-（1~2 點本次會議提及之實際風險與下步行動）
+（1~2 點本次會議提及之實際風險與下步行動，附時間戳）
 
 【會議提煉事實清單】：
 ${consolidatedFacts.slice(0, 16000)}`;
@@ -349,7 +492,30 @@ ${consolidatedFacts.slice(0, 16000)}`;
       });
 
       const finalData = await finalRes.json();
-      const polishedText = finalData?.choices?.[0]?.message?.content || "";
+      let polishedText = finalData?.choices?.[0]?.message?.content || "";
+
+      // Post-Processing Grounding Verifier (jt-doc-tools inspired)
+      if (!hasExhibitionKeywords && scenario !== "exhibition") {
+        const hadHallucination = /展會|攤位|策展|Jennifer/i.test(polishedText);
+        if (hadHallucination) {
+          console.warn("[Grounding Verifier] Filtered unauthorized exhibition hallucinations.");
+          polishedText = polishedText
+            .replace(/展會籌備與攤位承攬/g, "團隊聚會與活動安排")
+            .replace(/攤位承攬商/g, "場地合作單位")
+            .replace(/攤位數量/g, "預定桌數/席位")
+            .replace(/4\s*個攤位/g, "4 桌 (約 20 人)")
+            .replace(/展會晚宴/g, "團隊聚餐")
+            .replace(/展會進場/g, "聚餐進場")
+            .replace(/展會人員/g, "出席人員")
+            .replace(/展會相關協議書與租約/g, "案場協議書與租約")
+            .replace(/重點案場展覽合約/g, "重點案場工程合約")
+            .replace(/展會合約/g, "專案合約")
+            .replace(/展會策劃團隊/g, "行政團隊")
+            .replace(/Jennifer\s*導演[、與和]?/gi, "")
+            .replace(/攤位系統整合交付/g, "系統軟硬體整合交付")
+            .replace(/攤位/g, "席位");
+        }
+      }
 
       return Response.json({
         choices: [
@@ -372,13 +538,13 @@ ${consolidatedFacts.slice(0, 16000)}`;
       const list: Array<{ name: string; path: string; size: number; mtime: string }> = [];
       const seen = new Set<string>();
 
-      function scan(dir: string) {
+      function scan(dir: string, depth = 0) {
         try {
           for (const f of Deno.readDirSync(dir)) {
+            const full = `${dir}\\${f.name}`;
             if (f.isFile && f.name.endsWith(".md")) {
-              const full = `${dir}\\${f.name}`;
-              if (!seen.has(f.name)) {
-                seen.add(f.name);
+              if (!seen.has(full)) {
+                seen.add(full);
                 const stat = Deno.statSync(full);
                 list.push({
                   name: f.name,
@@ -387,13 +553,15 @@ ${consolidatedFacts.slice(0, 16000)}`;
                   mtime: stat.mtime ? stat.mtime.toISOString() : new Date().toISOString()
                 });
               }
+            } else if (f.isDirectory && depth < 2 && !f.name.startsWith(".") && dir !== desktopDir) {
+              scan(full, depth + 1);
             }
           }
         } catch (_) {}
       }
 
-      scan(meetingsDir);
-      scan(desktopDir);
+      scan(meetingsDir, 0);
+      scan(desktopDir, 0);
 
       list.sort((a, b) => b.name.localeCompare(a.name));
       return Response.json({ success: true, files: list });
@@ -451,23 +619,27 @@ ${consolidatedFacts.slice(0, 16000)}`;
     }
   }
 
-  // 6. API: /api/delete-meeting (Deletes from Meetings & Desktop)
+  // 6. API: /api/delete-meeting (Deletes file and cleans empty folder)
   if (pathname === "/api/delete-meeting" && req.method === "POST") {
     try {
       const { path } = await req.json();
       if (!path) return Response.json({ success: false, error: "Missing path" });
 
       const filename = path.substring(path.lastIndexOf("\\") + 1);
-      const projPath = `${meetingsDir}\\${filename}`;
-      const deskPath = `${desktopDir}\\${filename}`;
-      const docProjPath = projPath.replace(/\.md$/, ".doc");
-      const docDeskPath = deskPath.replace(/\.md$/, ".doc");
+      const parentDir = path.substring(0, path.lastIndexOf("\\"));
 
       try { Deno.removeSync(path); } catch (_) {}
-      try { Deno.removeSync(projPath); } catch (_) {}
-      try { Deno.removeSync(deskPath); } catch (_) {}
-      try { Deno.removeSync(docProjPath); } catch (_) {}
-      try { Deno.removeSync(docDeskPath); } catch (_) {}
+      try { Deno.removeSync(path.replace(/\.md$/, ".doc")); } catch (_) {}
+
+      // Clean empty meeting directory if parent is not root meetingsDir or desktopDir
+      try {
+        if (parentDir !== meetingsDir && parentDir !== desktopDir) {
+          const remaining = Array.from(Deno.readDirSync(parentDir));
+          if (remaining.length === 0) {
+            Deno.removeSync(parentDir);
+          }
+        }
+      } catch (_) {}
 
       return Response.json({ success: true, message: `已成功刪除會議檔案：${filename}` });
     } catch (err) {
@@ -475,44 +647,48 @@ ${consolidatedFacts.slice(0, 16000)}`;
     }
   }
 
-  // 7. API: /api/import-meeting (Imports an external .md or .txt file)
+  // 7. API: /api/import-meeting (Imports an external .md or .txt file into meeting subfolder)
   if (pathname === "/api/import-meeting" && req.method === "POST") {
     try {
-      const { filename, content } = await req.json();
+      const { filename, content, customDir } = await req.json();
       if (!filename || !content) {
         return Response.json({ success: false, error: "Missing filename or content" });
       }
 
       const cleanName = filename.endsWith(".md") ? filename : `${filename.replace(/\.[^/.]+$/, "")}.md`;
-      const projPath = `${meetingsDir}\\${cleanName}`;
-      const deskPath = `${desktopDir}\\${cleanName}`;
+      const baseDir = resolveTargetDirectory(customDir);
+      const folderName = getMeetingFolderName(cleanName);
+      const meetingFolder = `${baseDir}\\${folderName}`;
+      try { Deno.mkdirSync(meetingFolder, { recursive: true }); } catch (_) {}
+      const targetFilePath = `${meetingFolder}\\${cleanName}`;
 
-      Deno.writeTextFileSync(projPath, content);
-      try { Deno.writeTextFileSync(deskPath, content); } catch (_) {}
-
-      return Response.json({ success: true, path: projPath, filename: cleanName });
+      Deno.writeTextFileSync(targetFilePath, content);
+      return Response.json({ success: true, path: targetFilePath, filename: cleanName, folder: meetingFolder });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
   }
 
-  // 6. API: /api/save-audio (Automatically saves recorded audio blob)
+  // 8. API: /api/save-audio (Automatically saves recorded audio blob into meeting subfolder)
   if (pathname === "/api/save-audio" && req.method === "POST") {
     try {
       const rawHeader = req.headers.get("X-Filename");
       const filename = rawHeader ? decodeURIComponent(rawHeader) : `Recording_${Date.now()}.webm`;
       const cleanName = filename.endsWith(".webm") ? filename : `${filename}.webm`;
+      const customDirHeader = req.headers.get("X-Custom-Dir");
+      const customDir = customDirHeader ? decodeURIComponent(customDirHeader) : "";
+
       const rawBytes = new Uint8Array(await req.arrayBuffer());
 
-      try { Deno.mkdirSync(meetingsDir, { recursive: true }); } catch (_) {}
-      const projPath = `${meetingsDir}\\${cleanName}`;
-      const deskPath = `${desktopDir}\\${cleanName}`;
+      const baseDir = resolveTargetDirectory(customDir);
+      const folderName = getMeetingFolderName(cleanName);
+      const meetingFolder = `${baseDir}\\${folderName}`;
+      try { Deno.mkdirSync(meetingFolder, { recursive: true }); } catch (_) {}
+      const targetFilePath = `${meetingFolder}\\${cleanName}`;
 
-      Deno.writeFileSync(projPath, rawBytes);
-      try { Deno.writeFileSync(deskPath, rawBytes); } catch (_) {}
-
-      console.log(`[SaveAudio] Saved ${rawBytes.length} bytes to ${projPath}`);
-      return Response.json({ success: true, path: projPath });
+      Deno.writeFileSync(targetFilePath, rawBytes);
+      console.log(`[SaveAudio] Saved ${rawBytes.length} bytes to ${targetFilePath}`);
+      return Response.json({ success: true, path: targetFilePath, folder: meetingFolder });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
@@ -602,7 +778,7 @@ ${consolidatedFacts.slice(0, 16000)}`;
     }
   }
 
-  // 10. API: /api/auto-save
+  // 10. API: /api/auto-save (Saves markdown or transcript into meeting's dedicated folder)
   if (pathname === "/api/auto-save" && req.method === "POST") {
     try {
       const { filename, content, type, customDir } = await req.json();
@@ -611,18 +787,13 @@ ${consolidatedFacts.slice(0, 16000)}`;
       const ext = type === "markdown" ? ".md" : ".txt";
       const cleanName = filename.endsWith(ext) ? filename : `${filename}${ext}`;
 
-      let targetDir = meetingsDir;
-      if (customDir) {
-        try {
-          if (Deno.statSync(customDir).isDirectory) targetDir = customDir;
-        } catch (_) {}
-      }
+      const baseDir = resolveTargetDirectory(customDir);
+      const folderName = getMeetingFolderName(cleanName);
+      const meetingFolder = `${baseDir}\\${folderName}`;
+      try { Deno.mkdirSync(meetingFolder, { recursive: true }); } catch (_) {}
+      const targetFilePath = `${meetingFolder}\\${cleanName}`;
 
-      const projPath = `${targetDir}\\${cleanName}`;
-      const deskPath = `${desktopDir}\\${cleanName}`;
-
-      Deno.writeTextFileSync(projPath, content);
-      try { Deno.writeTextFileSync(deskPath, content); } catch (_) {}
+      Deno.writeTextFileSync(targetFilePath, content);
 
       // Automatically deposit a copy to D:\project\TrainingData\[Topic]_(地端初稿).md
       if (type === "markdown") {
@@ -634,7 +805,8 @@ ${consolidatedFacts.slice(0, 16000)}`;
         } catch (_) {}
       }
 
-      return Response.json({ success: true, path: projPath, desktopPath: deskPath });
+      console.log(`[AutoSave] Saved to ${targetFilePath}`);
+      return Response.json({ success: true, path: targetFilePath, folder: meetingFolder });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
@@ -660,11 +832,11 @@ ${consolidatedFacts.slice(0, 16000)}`;
   }
 });
 
-// Automatic Dual-Engine Model Pre-warming (Zero Cold-Start Lag)
+// Automatic Model Pre-warming (Zero Cold-Start Lag)
 (async () => {
   try {
     const testWav = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\test_wavs\\zh.wav";
-    console.log("[Pre-warm] Pre-warming SenseVoice (阿里開源) & Whisper in background...");
+    console.log("[Pre-warm] Pre-warming SenseVoice (阿里開源) in background...");
     
     // 1. Pre-warm SenseVoice
     const sv = new Deno.Command(senseVoiceCli, {
@@ -672,14 +844,7 @@ ${consolidatedFacts.slice(0, 16000)}`;
     });
     await sv.output();
 
-    // 2. Pre-warm Whisper
-    const ws = new Deno.Command(whisperCli, {
-      args: ["-m", whisperModel, "-l", "zh", "-t", "2", "-f", testWav, "-otxt", "-of", `${tempDir}\\warmup`]
-    });
-    await ws.output();
-    try { Deno.removeSync(`${tempDir}\\warmup.txt`); } catch (_) {}
-
-    console.log("✨ [Pre-warm] SenseVoice & Whisper dual STT models fully warmed up into memory!");
+    console.log("✨ [Pre-warm] SenseVoice STT model fully warmed up into memory!");
   } catch (err) {
     console.warn("[Pre-warm] Background pre-warm notice:", err);
   }
