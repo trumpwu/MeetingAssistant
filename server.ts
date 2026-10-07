@@ -47,35 +47,30 @@ function segmentSenseVoiceText(data: { text: string; timestamps?: number[]; toke
 try { Deno.mkdirSync(meetingsDir, { recursive: true }); } catch (_) {}
 try { Deno.mkdirSync(tempDir, { recursive: true }); } catch (_) {}
 
+// Dynamic Phonetic Dictionary Loader (Loads from data/phonetic_dictionary.json)
+function loadPhoneticDictionary(): Array<[RegExp, string]> {
+  try {
+    const dictPath = `${root}\\data\\phonetic_dictionary.json`;
+    const raw = JSON.parse(Deno.readTextFileSync(dictPath));
+    const rules: Array<[RegExp, string]> = [];
+    for (const [correct, wrongs] of Object.entries(raw as Record<string, any>)) {
+      if (correct.startsWith("_") || !Array.isArray(wrongs) || wrongs.length === 0) continue;
+      const escaped = wrongs.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+      rules.push([new RegExp(`(?:${escaped})`, "g"), correct]);
+    }
+    return rules;
+  } catch (err) {
+    console.warn("[Dictionary] Notice: loading phonetic dictionary failed or empty, fallback to clean:", err);
+    return [];
+  }
+}
+
 // Stage 2: Two-Stage Semantic & Phonetic Calibration via local Qwen 2.5 7B & Domain Dictionary
 async function calibrateTranscript(rawTranscript: string, isFastMode = false): Promise<string> {
   if (!rawTranscript || rawTranscript.trim().length === 0) return rawTranscript;
 
-  // 1. First-pass rule-based phonetic dictionary corrections (handles frequent Taiwan enterprise/ESG terminology)
-  const phoneticReplacements: Array<[RegExp, string]> = [
-    [/(?:美國清|沒心|美活清|梅國青)/g, "梅國清"],
-    [/(?:炭牌|碳牌)/g, "碳排"],
-    [/(?:炭水|碳水)(?=[，。、\s對]|上上次)/g, "碳稅"],
-    [/(?:碳圖機|正圖機|碳突擊)/g, "碳足跡"],
-    [/(?:能源見久|能源建檢)/g, "能源健檢"],
-    [/(?:無城市|無程室)/g, "無塵室"],
-    [/(?:一百克|100克)(?=[，。、\s]|但你的產品)/g, "100 Class"],
-    [/(?:一千克|1000克)(?=[，。、\s]|class)/gi, "1000 Class"],
-    [/(?:周金件走|周金見走)/g, "捉襟見肘"],
-    [/(?:他光天協會|光天協會)/g, "台灣光電協會"],
-    [/(?:節能鹼看|節能簡看)/g, "節能減碳"],
-    [/(?:提管|器管)(?=[啊啦，。])/g, "踢館"],
-    [/(?:一高一兩|依高)/g, "益高"],
-    [/(?:節能模)/g, "節能膜"],
-    [/(?:行路)(?=[，。、\s]|在我的桌上)/g, "型錄"],
-    [/(?:台笛電|臺笛業|臺笛)(?=[，。、\s]|生意)/g, "台積電"],
-    [/(?:利陽|立陽)(?=[，。、\s]|說穿了)/g, "立陽"],
-    [/(?:利破|立巴)(?=[，。、\s]|好目|集團)/g, "立霸"],
-    [/(?:國太建設)/g, "國泰建設"],
-    [/(?:公院|空院)(?=[，。、\s]|可以給我們東西)/g, "工研院"],
-    [/(?:十三班)(?=[，。、\s？?]|新創)/g, "實戰班"]
-  ];
-
+  // 1. First-pass dynamic phonetic dictionary corrections (handles Taiwan enterprise/ESG terminology)
+  const phoneticReplacements = loadPhoneticDictionary();
   let cleaned = rawTranscript;
   for (const [pattern, replacement] of phoneticReplacements) {
     cleaned = cleaned.replace(pattern, replacement);
@@ -263,8 +258,11 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       // 2. Transcribe via Alibaba SenseVoice (FunASR Nano int8)
       const requestedEngine = (req.headers.get("X-Engine") || "sensevoice").toLowerCase();
       const isFast = requestedEngine === "sensevoice_fast";
+      const isEnglish = requestedEngine === "english_live" || requestedEngine === "whisper";
       let transcript = "";
-      const engineUsed = isFast ? "SenseVoice 50x 原生極速" : "SenseVoice 50x + Qwen 2.5 雙層語意校準";
+      const engineUsed = isEnglish
+        ? "SenseVoice 英文辨識 + Qwen 2.5 繁中同傳"
+        : (isFast ? "SenseVoice 50x 原生極速" : "SenseVoice 50x + Qwen 2.5 雙層語意校準");
 
       if (chunkFiles.length > 0) {
         console.log(`[Transcribe] 音訊分切為 ${chunkFiles.length} 片段，使用 ${engineUsed} 轉錄...`);
@@ -332,8 +330,45 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         return Response.json({ success: false, error: "音訊轉錄結果為空，請確認檔案是否有清晰人聲。" });
       }
 
-      // 3. Stage 2 Calibration: Automatically calibrate raw transcript via Two-Stage Pipeline
-      const calibratedTranscript = await calibrateTranscript(transcript, isFast);
+      // If English meeting mode requested, translate English transcript to Traditional Chinese
+      let calibratedTranscript = transcript;
+      if (isEnglish) {
+        try {
+          console.log("[Transcribe] English meeting mode: Translating English transcript to Traditional Chinese via Qwen 2.5...");
+          const transRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "qwen2.5-7b-instruct",
+              messages: [
+                {
+                  role: "system",
+                  content: "你是專業即時同聲傳譯專家。請將以下英文會議逐字稿翻譯為流暢地道的台灣繁體中文逐字稿，保留原發言順序與時間標籤（如 [MM:SS]），嚴禁做成摘要，直接輸出純繁體中文逐字稿："
+                },
+                {
+                  role: "user",
+                  content: transcript.slice(0, 16000)
+                }
+              ],
+              temperature: 0.1,
+              max_tokens: 4096
+            }),
+            signal: AbortSignal.timeout(30000)
+          });
+          if (transRes.ok) {
+            const transData = await transRes.json();
+            const translatedText = transData?.choices?.[0]?.message?.content?.trim();
+            if (translatedText && translatedText.length > 20) {
+              calibratedTranscript = translatedText;
+            }
+          }
+        } catch (err) {
+          console.warn("[Transcribe] English translation timeout/fallback to raw transcript:", err);
+        }
+      } else {
+        // 3. Stage 2 Calibration: Automatically calibrate raw transcript via Two-Stage Pipeline
+        calibratedTranscript = await calibrateTranscript(transcript, isFast);
+      }
 
       return Response.json({ success: true, transcript: calibratedTranscript, raw_transcript: transcript, filename: rawFilename, engineUsed });
     } catch (err) {
@@ -358,7 +393,8 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
           ],
           temperature: 0.1,
           max_tokens: 256
-        })
+        }),
+        signal: AbortSignal.timeout(8000)
       });
       const data = await llamaRes.json();
       const translated = data?.choices?.[0]?.message?.content?.trim() || text;

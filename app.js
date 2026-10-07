@@ -348,7 +348,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     speechRecognizer.onresult = (event) => {
       let interim = '';
-      const isEnglishMode = engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr');
+      const isEnglishMode = engineSelect && (
+        engineSelect.value === 'whisper' ||
+        engineSelect.value === 'whisper-base-tr' ||
+        engineSelect.value === 'english_live'
+      );
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const transcriptChunk = event.results[i][0].transcript;
@@ -361,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (isEnglishMode) {
               const tempTrans = quickLiveTranslate(finalRaw);
-              liveStreamText.textContent = `⚡ ${tempTrans}`;
+              liveStreamText.textContent = `⚡ 正在翻譯：${tempTrans || finalRaw}`;
 
               fetch('/api/translate', {
                 method: 'POST',
@@ -375,7 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTranscriptStats();
                 liveStreamText.textContent = `✅ [${spkTag}]: ${chineseLine}`;
               }).catch(() => {
-                const formattedLine = `[${nowTime}] [${spkTag}]: ${tempTrans}`;
+                const formattedLine = `[${nowTime}] [${spkTag}]: ${tempTrans || finalRaw}`;
                 rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
                 rawTranscript.scrollTop = rawTranscript.scrollHeight;
                 updateTranscriptStats();
@@ -399,25 +403,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // Rolling real-time subtitle window
+      // Rolling real-time subtitle window (0ms instant preview without GPU blocking)
       if (interim.trim()) {
         const liveRaw = interim.trim();
         if (isEnglishMode) {
           const instantZh = quickLiveTranslate(liveRaw);
-          liveStreamText.textContent = `🎙️ ${instantZh}`;
-
-          clearTimeout(liveTransTimer);
-          liveTransTimer = setTimeout(() => {
-            fetch('/api/translate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: liveRaw })
-            }).then(r => r.json()).then(d => {
-              if (d.success && d.translated && isRecording) {
-                liveStreamText.textContent = `⚡ 實時繁中：${d.translated}`;
-              }
-            }).catch(() => {});
-          }, 250);
+          liveStreamText.textContent = `🎙️ 正在說話 (英)：${liveRaw}  ➔  [${instantZh || '即時轉譯中...'}]`;
         } else {
           liveStreamText.textContent = `🎙️ 正在說話：${liveRaw}`;
         }
@@ -465,7 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Language switcher event listener
     if (engineSelect) {
       engineSelect.addEventListener('change', () => {
-        const isEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr';
+        const isEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
         speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
         if (isRecording) {
           try { speechRecognizer.stop(); } catch (_) {}
@@ -564,8 +555,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x + Qwen 2.5 Two-Stage Calibration)
-        const currentEngine = (engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice';
-        const engineLabel = currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準';
+        const isEngMode = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
+        const currentEngine = isEngMode ? 'english_live' : ((engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice');
+        const engineLabel = isEngMode ? 'SenseVoice 英文辨識 + Qwen 2.5 繁中同傳' : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準');
         const existingLive = rawTranscript.value.trim();
         if (!existingLive) {
           rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在進行智慧轉錄與實體校準中，請稍候...`;
@@ -602,8 +594,14 @@ document.addEventListener('DOMContentLoaded', () => {
               })
               .filter(l => l.length > 0)
               .join('\n');
-            rawTranscript.value = formatted;
-            updateTranscriptStats();
+            
+            // If English live translation already captured a solid transcript, preserve it or complement it
+            if (isEngMode && existingLive && existingLive.length > 80 && !existingLive.includes('[系統提示]')) {
+              console.log('Preserving high-precision real-time live English translation.');
+            } else {
+              rawTranscript.value = formatted;
+              updateTranscriptStats();
+            }
 
             // Auto-save transcript into meeting folder
             const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
@@ -612,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 filename: transcriptFilename,
-                content: formatted,
+                content: rawTranscript.value,
                 type: 'transcript',
                 customDir: targetDir
               })
@@ -624,11 +622,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！逐字稿已自動歸檔。`, 5000);
           } else {
-            rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
+            if (!existingLive || existingLive.includes('[系統提示]')) {
+              rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
+            }
             showToast(`⚠️ 轉錄提示: ${data?.error || '未能辨識出清晰人聲'}`, 5000);
           }
         } catch (e) {
-          rawTranscript.value = `[轉錄提示] ⚠️ 本機轉錄連線異常，請確認後端服務正常運行。\n異常資訊：${e.message}`;
+          if (!existingLive || existingLive.includes('[系統提示]')) {
+            rawTranscript.value = `[轉錄提示] ⚠️ 本機轉錄連線異常，請確認後端服務正常運行。\n異常資訊：${e.message}`;
+          }
           showToast(`❌ 轉錄連線失敗: ${e.message}`, 5000);
         }
       };
@@ -640,7 +642,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Start Speech Recognizer with configured language
       if (speechRecognizer) {
-        speechRecognizer.lang = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'en-US' : 'zh-TW';
+        const isEng = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
+        speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
         try { speechRecognizer.abort(); } catch (_) {}
         setTimeout(() => {
           try {
@@ -660,7 +663,7 @@ document.addEventListener('DOMContentLoaded', () => {
       recordStatusBadge.textContent = '錄音辨識中';
       recordStatusBadge.className = 'badge badge-recording';
       waveContainer.classList.add('recording');
-      waveText.textContent = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ?
+      waveText.textContent = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live')) ?
         '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
       
       showToast('🔴 錄音與即時辨識已啟動！');
@@ -766,8 +769,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function handleAudioFileUpload(file) {
     if (!file) return;
-    const currentEngine = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr')) ? 'whisper' : 'sensevoice';
-    const engineLabel = currentEngine === 'sensevoice' ? '阿里 SenseVoice (50x 極速繁中)' : 'Whisper 10核心 (中英雙語)';
+    const isEng = engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live');
+    const currentEngine = isEng ? 'english_live' : ((engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice');
+    const engineLabel = isEng ? 'SenseVoice 英文辨識 + Qwen 2.5 繁中同傳' : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : '阿里 SenseVoice (50x 極速繁中)');
     fileTranscribeProgress.style.display = 'flex';
     showToast(`🎙️ 正在以 ${engineLabel} 轉錄 ${file.name} (請稍候)...`, 4000);
 
@@ -873,6 +877,7 @@ document.addEventListener('DOMContentLoaded', () => {
 1. 所有決策、發言人、技術數據與待辦事項，必須 100% 來自本次會議逐字稿的真實對話！嚴禁捏造、幻覺或帶入未提及的人名（如無提及嚴禁帶入無關英文名）或無關數據！
 2. 每一項核心決策、關鍵規格、待辦事項末尾，請盡可能標註對應之逐字稿時間出處標記（如 [05:20] 或 [12:30]），以便核實！
 3. 若非明確公眾展覽，絕對嚴禁將內部聚會（如飯店聚餐）、工作排程或專案採購臆測為展覽或攤位承攬！
+4. 【跨語言英翻繁中規範】：若逐字稿為英文或中英夾雜，請一律精準翻譯並以流暢地道的台灣繁體中文商務用語呈現，確保高階主管能直接閱讀。
 
 # 📋 ${meetingTitle} - 精華重點會議紀錄
 > **會議日期**：${meetingDate} | **地點**：${meetingLocation} | **出席人員**：${attendees}
