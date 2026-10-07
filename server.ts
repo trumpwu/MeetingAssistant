@@ -401,8 +401,8 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         scenarioGuide = "【當前會議情境：公眾展會 / 大型對外活動籌備】\n主要關注：展位規劃、展示設備、文宣推廣與人員輪值。";
       }
 
-      // Step 2: Map-Reduce Chunking
-      const CHUNK_SIZE = 3500;
+      // Step 2: Map-Reduce Chunking (Adapted for Qwen 2.5 8K Large Context)
+      const CHUNK_SIZE = 12000;
       let consolidatedFacts = "";
 
       if (cleanedTranscript.length > CHUNK_SIZE) {
@@ -410,6 +410,8 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         for (let i = 0; i < cleanedTranscript.length; i += CHUNK_SIZE) {
           chunks.push(cleanedTranscript.substring(i, i + CHUNK_SIZE));
         }
+
+        console.log(`[Summarize] Map-Reduce: 分 ${chunks.length} 個大區塊加速提煉事實...`);
 
         // Map Phase: Extract factual key points per segment with Timestamps
         const extractedSegments: string[] = [];
@@ -428,7 +430,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
                 { role: "user", content: `【會議片段 ${idx + 1}/${chunks.length}】：\n${chunk}` }
               ],
               temperature: 0.1,
-              max_tokens: 600
+              max_tokens: 800
             })
           });
           const mapData = await mapRes.json();
