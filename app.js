@@ -171,12 +171,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (num && currentName) {
         let text = rawTranscript.value;
         const patterns = [
+          new RegExp(`\\[發言\\s*\\d+\\]\\s*\\[Speaker\\s*${num}\\]:?`, 'gi'),
           new RegExp(`\\[?Speaker\\s*${num}\\]?:?`, 'gi'),
           new RegExp(`\\[?發言人\\s*${num}\\]?:?`, 'gi'),
           new RegExp(`【Speaker\\s*${num}】:?`, 'gi')
         ];
         if (previousValue) {
+          patterns.push(new RegExp(`\\[發言\\s*\\d+\\]\\s*【${previousValue}】:?`, 'g'));
           patterns.push(new RegExp(`【${previousValue}】:?`, 'g'));
+          patterns.push(new RegExp(`\\[${previousValue}\\]:?`, 'g'));
         }
         patterns.forEach(pat => {
           text = text.replace(pat, `【${currentName}】: `);
@@ -224,7 +227,8 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('逐字稿尚無內容，請先錄音或匯入音檔！');
       return;
     }
-    const matches = text.match(/\[?(?:Speaker|發言人)\s*(\d+)\]?:?/gi) || [];
+    // Only match Speaker numbers, strictly ignore general 發言 numbers
+    const matches = text.match(/Speaker\s*(\d+)/gi) || [];
     const foundIndices = new Set();
     matches.forEach(m => {
       const numMatch = m.match(/\d+/);
@@ -247,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const label = `Speaker ${num}`;
       addSpeakerRow(label, existing[label] || '');
     });
-    showToast(`✅ 已自動偵測出 ${sorted.length} 位發言人標籤！`);
+    showToast(`✅ 已自動偵測出 ${sorted.length} 位發言人標籤！請在右側輸入真實姓名！`);
   }
 
   if (autoDetectSpeakersBtn) {
@@ -266,6 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const num = spkLabel.match(/\d+/)?.[0];
         if (num) {
           const patterns = [
+            new RegExp(`\\[發言\\s*\\d+\\]\\s*\\[Speaker\\s*${num}\\]:?`, 'gi'),
             new RegExp(`\\[?Speaker\\s*${num}\\]?:?`, 'gi'),
             new RegExp(`\\[?發言人\\s*${num}\\]?:?`, 'gi'),
             new RegExp(`【Speaker\\s*${num}】:?`, 'gi')
@@ -461,11 +466,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isRecording) {
           try { speechRecognizer.stop(); } catch (_) {}
         }
+        const liveSubtitleBar = document.getElementById('live-subtitle-bar');
+        if (liveSubtitleBar) {
+          liveSubtitleBar.style.display = isEng ? 'flex' : 'none';
+        }
         if (waveText) {
           waveText.textContent = isEng ?
             '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
         }
       });
+      // Initial state
+      const initialIsEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
+      const liveSubtitleBar = document.getElementById('live-subtitle-bar');
+      if (liveSubtitleBar) {
+        liveSubtitleBar.style.display = initialIsEng ? 'flex' : 'none';
+      }
     }
   }
 
@@ -874,53 +889,68 @@ document.addEventListener('DOMContentLoaded', () => {
 【會議情境設定】：${currentScenarioName}
 
 【嚴格事實接地規範 (Grounding & Anti-Hallucination)】：
-1. 所有決策、發言人、技術數據與待辦事項，必須 100% 來自本次會議逐字稿的真實對話！嚴禁捏造、幻覺或帶入未提及的人名（如無提及嚴禁帶入無關英文名）或無關數據！
-2. 每一項核心決策、關鍵規格、待辦事項末尾，請盡可能標註對應之逐字稿時間出處標記（如 [05:20] 或 [12:30]），以便核實！
-3. 若非明確公眾展覽，絕對嚴禁將內部聚會（如飯店聚餐）、工作排程或專案採購臆測為展覽或攤位承攬！
-4. 【跨語言英翻繁中規範】：若逐字稿為英文或中英夾雜，請一律精準翻譯並以流暢地道的台灣繁體中文商務用語呈現，確保高階主管能直接閱讀。
+1. 嚴禁任何「30秒」、「極簡」等口號式標題。請整理為正式商務公文級會議紀錄！
+2. 所有決策、發言人、技術數據與待辦事項，必須 100% 來自本次會議逐字稿的真實對話！嚴禁捏造、幻覺或帶入未提及的人名！
+3. 每一項核心討論與決議末尾，請盡可能標註對應之逐字稿時間出處標記（如 [05:20] 或 [12:30]），以便核實！
+4. 【跨語言英翻繁中規範】：若逐字稿為英文或中英夾雜，請一律精準翻譯並以流暢地道的台灣繁體中文商務用語呈現。
 
-# 📋 ${meetingTitle} - 精華重點會議紀錄
-> **會議日期**：${meetingDate} | **地點**：${meetingLocation} | **出席人員**：${attendees}
+請直接輸出以下標準格式：
+# 📝 ${meetingTitle} - 正式會議紀錄
 
-## 🎯 一、30秒核心決策與共識 (Key Decisions)
-（精簡列出本場會議最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現，末尾附時間戳如 [05:20]）
+| 項目 | 內容 |
+| :--- | :--- |
+| **會議日期** | ${meetingDate} |
+| **會議地點** | ${meetingLocation} |
+| **出席人員** | ${attendees} |
+| **會議目的** | [依據會議內容歸納核心召開緣由與目標] |
 
-## 📊 二、關鍵數據與規格指標 (Key Metrics)
-| 項目 | 關鍵數值 / 規格 | 實務說明與場域 | 時間出處 |
-| :--- | :---: | :--- | :---: |
-（僅列出本次對話中實際提及的 3~4 項核心數值、型號或工程參數，無則省略）
+---
 
-## ✅ 三、行動追蹤矩陣 (Action Matrix)
-| 項次 | 具體待辦事項 | 優先級 | 負責人 | 完成時程 | 時間出處 |
-| :---: | :--- | :---: | :---: | :---: | :---: |
-（僅列出最核心的 3~5 項具體任務，優先級標註 [🔥最高]、[⚡高優先] 或 [📌中優先]，負責人請對齊真實發言或與會者）
+### 壹、會議緣起與背景說明
+（說明本次會議召開背景、前情提要或觸發事件）
 
-## ⚠️ 四、重點風險與下一步 (Next Steps)
-（1~2 點本次會議提及之實際風險與下步行動，附時間出處）
+### 貳、各項議題詳細討論紀要
+（請依討論主題拆分：【議題一：...】、【議題二：...】等。
+每一議題詳實記錄：
+- 討論核心與痛點
+- 各方發言觀點與論證依據，附時間標籤 [MM:SS]
+- 方案比較與決策考量）
+
+### 參、核心決議事項 (Resolutions)
+（以清晰清單明確列出本場會議拍板定案的所有重大事項，不含糊、不遺漏，附時間標籤）
+
+### 肆、工作分工與行動追蹤表 (Action Items)
+| 項次 | 待辦工作事項 | 具體交付成果 | 主責人員 | 協辦/支援 | 預計完成期限 | 時間出處 |
+| :---: | :--- | :--- | :---: | :---: | :---: | :---: |
+（具體任務列出，不空泛，責任到人）
+
+### 伍、後續待辦與未決追蹤事項 (Pending Issues)
+（記錄會中提及但需會後確認、查證或下次再議的事項，附時間出處）
 
 會議逐字稿：
 ${processedTranscript.slice(0, 32000)}`;
 
+      const savedGeminiKey = localStorage.getItem('gemini_api_key') || '';
       const aiResponse = await fetch('/api/ai-summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'qwen2.5-7b-instruct',
-          scenario: meetingScenario,
+          geminiApiKey: savedGeminiKey,
+          model: savedGeminiKey ? 'gemini-1.5-flash' : 'qwen2.5-7b-instruct',
           messages: [
             {
               role: 'system',
-              content: '你是專業的高階主管會議記錄秘書，請使用繁體中文輸出【極簡精華版】會議紀錄。文字務必簡明扼要、直切要害、去除廢話，總篇幅控制在 1 頁 A4 螢幕範圍內。'
+              content: '你是專業的高階主管會議記錄秘書，請使用台灣繁體中文輸出結構完整、事實嚴謹接地、詳實客觀的【正式商務會議紀錄】。'
             },
             {
               role: 'user',
               content: aiPrompt
             }
           ],
-          temperature: 0.1,
-          presence_penalty: 0.0,
-          frequency_penalty: 0.0,
-          max_tokens: 2048
+          temperature: 0.2,
+          repeat_penalty: 1.18,
+          frequency_penalty: 0.3,
+          max_tokens: 3500
         })
       });
 
@@ -1832,6 +1862,193 @@ ${processedTranscript}`;
         rlFeedbackBtn.disabled = false;
         rlFeedbackBtn.innerHTML = '🧠 👍 納入 AI 強化學習 (標竿範例)';
       }
+  // ==========================================
+  // NotebookLM Source Formatter & Exporter
+  // ==========================================
+  function generateNotebookLMSource(title, transcript, minutes) {
+    const today = new Date().toISOString().split('T')[0];
+    return `# 【會議知識庫文件】${title || '商務會議'}
+會議時間：${today}
+文件性質：正式會議紀錄與原始時間戳記逐字稿（NotebookLM / Gemini 來源專用）
+
+============================================================
+壹、正式商務會議紀錄
+============================================================
+${minutes || '（尚未生成會議紀錄）'}
+
+============================================================
+貳、原始發言逐字稿（含時間標籤）
+============================================================
+${transcript || '（無逐字稿內容）'}
+`;
+  }
+
+  // ==========================================
+  // Clean Transcript Copy for AGY / Gemini Direct Paste
+  // ==========================================
+  const copyTranscriptCleanBtn = document.getElementById('copy-transcript-clean-btn');
+  if (copyTranscriptCleanBtn) {
+    copyTranscriptCleanBtn.addEventListener('click', async () => {
+      applySpeakerMappingToTranscript();
+      const title = meetingTitleInput ? meetingTitleInput.value.trim() : '會議討論';
+      const transcript = rawTranscript ? rawTranscript.value.trim() : '';
+
+      if (!transcript) {
+        showToast('⚠️ 目前逐字稿尚無內容，請先錄音或匯入音檔！', 3000);
+        return;
+      }
+
+      const formatted = `請擔任專業的高階主管會議記錄秘書，根據以下會議逐字稿，使用道地、嚴謹的台灣繁體中文商務用語，客觀整理成一份【正式、詳實、結構化的商務會議紀錄】。
+
+【格式要求】：
+# 📝 ${title} - 正式會議紀錄
+
+| 項目 | 內容 |
+| :--- | :--- |
+| **會議日期** | ${new Date().toISOString().split('T')[0]} |
+| **會議地點** | 公司會議室 |
+| **會議目的** | [依據對話脈絡歸納核心召開緣由與目標] |
+
+---
+
+### 壹、會議緣起與背景說明
+（簡要說明本次會議召開背景、前情提要或外部觸發事件）
+
+### 貳、各項議題詳細討論紀要
+（依討論主題拆分：【議題一：...】、【議題二：...】等。
+每一議題詳實記錄：
+- 討論核心與痛點
+- 各方發言觀點與論證依據，附時間標籤 [MM:SS]
+- 方案比較與決策考量）
+
+### 參、核心決議事項 (Resolutions)
+（以清晰清單明確列出本場會議拍板定案的所有重大事項，不含糊、不遺漏，附時間標籤）
+
+### 肆、工作分工與行動追蹤表 (Action Items)
+| 項次 | 待辦工作事項 | 具體交付成果 | 主責人員 | 協辦/支援 | 預計完成期限 | 時間出處 |
+| :---: | :--- | :--- | :---: | :---: | :---: | :---: |
+（具體任務列出，責任到人）
+
+### 伍、後續待辦與未決追蹤事項 (Pending Issues)
+（記錄會中提及但需會後確認、查證或下次再議的事項）
+
+【會議逐字稿如下】：
+${transcript}
+`;
+      try {
+        await navigator.clipboard.writeText(formatted);
+        showToast('📋 已複製【逐字稿＋專業會議Prompt】！直接在 Gemini / ChatGPT / Claude 按 Ctrl+V 貼上即可秒出正式會議紀錄！', 6000);
+      } catch (_) {
+        showToast('❌ 複製失敗，請手動選取複製！');
+      }
+    });
+  }
+
+  const copyNotebooklmBtn = document.getElementById('copy-notebooklm-btn');
+  const copyNotebooklmTopBtn = document.getElementById('copy-notebooklm-top-btn');
+
+  const handleCopyNotebookLM = async () => {
+    const title = meetingTitleInput ? meetingTitleInput.value.trim() : '會議紀錄';
+    const transcript = rawTranscript ? rawTranscript.value.trim() : '';
+    const minutes = outputMarkdown ? outputMarkdown.value.trim() : '';
+
+    if (!transcript && !minutes) {
+      showToast('⚠️ 目前尚無逐字稿或會議紀錄可匯出！', 3000);
+      return;
+    }
+
+    const formatted = generateNotebookLMSource(title, transcript, minutes);
+    try {
+      await navigator.clipboard.writeText(formatted);
+      showToast('📓 已複製 NotebookLM 專用來源格式！前往 NotebookLM 新增來源貼上即可！', 4500);
+    } catch (_) {
+      showToast('❌ 複製失敗，請手動複製！');
+    }
+  };
+
+  if (copyNotebooklmBtn) copyNotebooklmBtn.addEventListener('click', handleCopyNotebookLM);
+  if (copyNotebooklmTopBtn) copyNotebooklmTopBtn.addEventListener('click', handleCopyNotebookLM);
+
+  const kbCopyNotebooklmBtn = document.getElementById('kb-copy-notebooklm-btn');
+  if (kbCopyNotebooklmBtn) {
+    kbCopyNotebooklmBtn.addEventListener('click', async () => {
+      if (!currentKbDoc) {
+        showToast('⚠️ 請先由左側點選一份欲複製的會議紀錄！', 3000);
+        return;
+      }
+      const title = kbDocTitle ? kbDocTitle.textContent.trim() : '歷史會議紀錄';
+      const formatted = generateNotebookLMSource(title, '', currentKbDoc);
+      try {
+        await navigator.clipboard.writeText(formatted);
+        showToast('📓 已複製 NotebookLM 專用格式！直接貼入 NotebookLM 即可進行問答！', 4500);
+      } catch (_) {
+        showToast('❌ 複製失敗！');
+      }
+    });
+  }
+
+  // ==========================================
+  // AI Settings Modal (Gemini API & Engine Mode)
+  // ==========================================
+  const aiSettingsBtn = document.getElementById('ai-settings-btn');
+  const aiSettingsModal = document.getElementById('ai-settings-modal');
+  const closeAiSettingsBtn = document.getElementById('close-ai-settings-btn');
+  const geminiKeyInput = document.getElementById('gemini-key-input');
+  const saveGeminiKeyBtn = document.getElementById('save-gemini-key-btn');
+  const clearGeminiKeyBtn = document.getElementById('clear-gemini-key-btn');
+
+  function updateAiSettingsButtonState() {
+    const key = localStorage.getItem('gemini_api_key');
+    if (aiSettingsBtn) {
+      if (key) {
+        aiSettingsBtn.innerHTML = '⚡ AI 引擎：<strong style="color:#059669;">線上 Gemini (啟用中)</strong>';
+        aiSettingsBtn.style.borderColor = '#10b981';
+      } else {
+        aiSettingsBtn.innerHTML = '⚙️ AI 引擎：<strong>本地 Qwen (離線)</strong>';
+        aiSettingsBtn.style.borderColor = '#3b82f6';
+      }
+    }
+  }
+
+  updateAiSettingsButtonState();
+
+  if (aiSettingsBtn && aiSettingsModal) {
+    aiSettingsBtn.addEventListener('click', () => {
+      if (geminiKeyInput) {
+        geminiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
+      }
+      aiSettingsModal.style.display = 'flex';
+    });
+  }
+
+  if (closeAiSettingsBtn && aiSettingsModal) {
+    closeAiSettingsBtn.addEventListener('click', () => {
+      aiSettingsModal.style.display = 'none';
+    });
+  }
+
+  if (saveGeminiKeyBtn) {
+    saveGeminiKeyBtn.addEventListener('click', () => {
+      const val = geminiKeyInput ? geminiKeyInput.value.trim() : '';
+      if (val) {
+        localStorage.setItem('gemini_api_key', val);
+        showToast('✅ 已成功儲存 Gemini API Key！切換為線上極速旗艦模式！', 4000);
+      } else {
+        localStorage.removeItem('gemini_api_key');
+        showToast('ℹ️ 已切換為本地離線 Qwen 模式！', 3000);
+      }
+      updateAiSettingsButtonState();
+      if (aiSettingsModal) aiSettingsModal.style.display = 'none';
+    });
+  }
+
+  if (clearGeminiKeyBtn) {
+    clearGeminiKeyBtn.addEventListener('click', () => {
+      localStorage.removeItem('gemini_api_key');
+      if (geminiKeyInput) geminiKeyInput.value = '';
+      showToast('ℹ️ 已清除金鑰，切換回本地 Qwen 純離線模式！', 3000);
+      updateAiSettingsButtonState();
+      if (aiSettingsModal) aiSettingsModal.style.display = 'none';
     });
   }
 });

@@ -404,40 +404,107 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
     }
   }
 
-  // 2. API: /api/ai-summarize (Industry Standard Map-Reduce Distillation Engine)
+  // 2. API: /api/ai-summarize (Supports Online Gemini API & Grounded Local LLM Engine)
   if (pathname === "/api/ai-summarize" && req.method === "POST") {
     try {
       const rawReq = await req.json();
       const messages = rawReq.messages || [];
       const userPrompt = messages.find((m: any) => m.role === "user")?.content || "";
-      const scenario = rawReq.scenario || "auto";
+      const geminiApiKey = rawReq.geminiApiKey || Deno.env.get("GEMINI_API_KEY") || "";
+      const useModel = rawReq.model || (geminiApiKey ? "gemini-1.5-flash" : "qwen2.5-7b-instruct");
 
       const transcriptMarker = "會議逐字稿：";
       const markerIdx = userPrompt.indexOf(transcriptMarker);
       const rawTranscript = markerIdx !== -1 ? userPrompt.substring(markerIdx + transcriptMarker.length).trim() : userPrompt;
 
-      // Step 1: Text De-noiser & Cleaner
+      // Clean redundant verbal tics
       const cleanedTranscript = rawTranscript
-        .replace(/(他[說就]|對呀|那個|嗯|啊|這這|我我|你你){2,}/g, "$1")
+        .replace(/(他[說就]|對呀|那個|嗯|啊|這這|我我|你你){3,}/g, "$1")
         .replace(/\n{3,}/g, "\n\n");
 
-      // Step 1.5: Scenario Detection & Anti-Hallucination Grounding Setup
-      const hasExhibitionKeywords = /展覽|世貿|南港展覽館|參展|攤位佈置|展品|主辦單位|外貿協會/i.test(rawTranscript);
+      // Professional Business Meeting Minutes Prompt
+      const formalSystemPrompt = `你是資深專案總監與高階會議紀錄專家。
+請根據使用者提供的會議逐字稿，客觀整理出【正規、詳實、結構化的商務正式會議紀錄】。
 
-      let scenarioGuide = "";
-      if (scenario === "weekly" || (scenario === "auto" && !hasExhibitionKeywords)) {
-        scenarioGuide = "【當前會議情境：公司內部常態週會 / 營運行政列管】\n主要關注：各同仁工作進度、團隊活動與聚餐訂位、行政待辦排程、各專案案場推展進度。嚴禁將內部聚餐或日常業務捏造為展覽、攤位或策展！";
-      } else if (scenario === "tech") {
-        scenarioGuide = "【當前會議情境：研發技術架構 / 系統審查對齊】\n主要關注：技術架構選型、API/資料庫設計、軟硬體整合測試、資安與穩定性規範。";
-      } else if (scenario === "engineering") {
-        scenarioGuide = "【當前會議情境：案場工程交付 / 硬體裝機驗收】\n主要關注：合約審查、配電圖與施工排程、設備叫料與驗收標準。";
-      } else if (scenario === "business") {
-        scenarioGuide = "【當前會議情境：商務合作洽談 / 客戶需求對齊】\n主要關注：商業合作模式、收費與合約條款、權責切分與交付里程碑。";
-      } else if (scenario === "exhibition" || hasExhibitionKeywords) {
-        scenarioGuide = "【當前會議情境：公眾展會 / 大型對外活動籌備】\n主要關注：展位規劃、展示設備、文宣推廣與人員輪值。";
+【嚴格紀律】：
+1. 嚴禁任何「30秒」、「極簡」、「速讀」等浮誇標題與縮水內容。
+2. 嚴格事實接地 (100% Grounding)：所有議題、數字、人名、結論必須完全來自逐字稿。未提及者嚴禁憑空捏造！
+3. 保留實質討論細節：詳細記錄討論中的關鍵考量、方案優劣比較、爭議點與決策理由。
+4. 每一項核心討論與決議末尾務必標註時間出處（如 [MM:SS]）。
+
+請直接輸出以下標準格式：
+# 📝 [會議主題] - 正式會議紀錄
+
+| 項目 | 內容 |
+| :--- | :--- |
+| **會議日期** | [年-月-日] |
+| **會議地點** | [地點] |
+| **出席人員** | [實際與會者，未提及則填「相關專案同仁」] |
+| **會議目的** | [本次會議核心召開緣由與目標] |
+
+---
+
+### 壹、會議緣起與背景說明
+（簡要說明本次會議召開背景、前情提要或外部觸發事件）
+
+### 貳、各項議題詳細討論紀要
+（請依討論主題拆分：【議題一：...】、【議題二：...】等。
+每一議題詳實記錄：
+- 討論核心與痛點
+- 各方發言觀點與論證依據，附時間標籤 [MM:SS]
+- 方案比較與決策考量）
+
+### 參、核心決議事項 (Resolutions)
+（以清晰清單明確列出本場會議拍板定案的所有重大事項，不含糊、不遺漏，附時間標籤）
+
+### 肆、工作分工與行動追蹤表 (Action Items)
+| 項次 | 待辦工作事項 | 具體交付成果 | 主責人員 | 協辦/支援 | 預計完成期限 | 時間出處 |
+| :---: | :--- | :--- | :---: | :---: | :---: | :---: |
+（具體任務列出，不空泛，責任到人）
+
+### 伍、後續待辦與未決追蹤事項 (Pending Issues)
+（記錄會中提及但需會後確認、查證或下次再議的事項，附時間出處）`;
+
+      // Branch A: Call Online Gemini 1.5 API (Ultra Fast & Native 1M Context)
+      if (geminiApiKey) {
+        console.log(`[Summarize] Using Online Gemini API (${useModel})...`);
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent?key=${geminiApiKey}`;
+        const geminiRes = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: `${formalSystemPrompt}\n\n會議逐字稿如下：\n${cleanedTranscript}` }
+                ]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 4096
+            }
+          })
+        });
+
+        if (geminiRes.ok) {
+          const geminiData = await geminiRes.json();
+          const generatedText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+          if (generatedText) {
+            return Response.json({
+              choices: [{ message: { role: "assistant", content: generatedText } }],
+              provider: "gemini"
+            });
+          }
+        } else {
+          const errText = await geminiRes.text();
+          console.warn("[Summarize] Gemini API notice, falling back to local:", errText);
+        }
       }
 
-      // Step 2: Map-Reduce Chunking (Adapted for Qwen 2.5 8K Large Context)
+      // Branch B: Local Qwen 2.5 7B Engine (With Anti-Repetition & Grounded Parameters)
+      console.log("[Summarize] Running Local Qwen 2.5 Engine with Anti-Loop protection...");
       const CHUNK_SIZE = 12000;
       let consolidatedFacts = "";
 
@@ -447,9 +514,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
           chunks.push(cleanedTranscript.substring(i, i + CHUNK_SIZE));
         }
 
-        console.log(`[Summarize] Map-Reduce: 分 ${chunks.length} 個大區塊加速提煉事實...`);
-
-        // Map Phase: Extract factual key points per segment with Timestamps
+        console.log(`[Summarize] Map-Reduce: 分 ${chunks.length} 個大區塊客觀提取事實...`);
         const extractedSegments: string[] = [];
         for (let idx = 0; idx < chunks.length; idx++) {
           const chunk = chunks[idx];
@@ -461,12 +526,13 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
               messages: [
                 {
                   role: "system",
-                  content: `你是事實提煉特助。${scenarioGuide}\n請客觀提取事實，每一點必須標註時間標籤（如 [MM:SS]）：1. 討論主題與達成之共識 2. 提及的數據/規格/型號/數值 3. 明確的待辦任務與責任人。只列事實，絕不添加無關人名或數據。嚴禁臆測非逐字稿提及的無關情境。`
+                  content: "你是事實提煉特助。請從以下會議片段中客觀提取事實，嚴禁使用口號：1. 討論主題與各方意見 2. 提及的數據/規格/數值 3. 達成的共識與待辦任務。每一點必須標註時間標籤（如 [MM:SS]）。只列真實事實，嚴禁腦補未提及的人名或情境。"
                 },
                 { role: "user", content: `【會議片段 ${idx + 1}/${chunks.length}】：\n${chunk}` }
               ],
-              temperature: 0.1,
-              max_tokens: 800
+              temperature: 0.2,
+              repeat_penalty: 1.15,
+              max_tokens: 1000
             })
           });
           const mapData = await mapRes.json();
@@ -478,40 +544,6 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         consolidatedFacts = cleanedTranscript;
       }
 
-      // Step 3: Reduce Phase (Global Executive Synthesis with Timestamp Anchoring)
-      const reducePrompt = `你是上市公司執行長特助。請根據以下【各段已提煉之會議事實清單】，直接整理成【1 頁極簡高管精華版】會議紀錄。
-
-${scenarioGuide}
-
-【嚴格反幻覺規範 (Grounding & Anti-Hallucination)】：
-1. 嚴禁無中生有！所有內容必須 100% 來自以下事實清單！
-2. 每一項核心決策、關鍵規格、待辦事項，末尾必須附帶時間戳標籤（如 [MM:SS]），有據可查！
-3. 若非公眾展覽，絕對嚴禁將聚餐、訂位、日常採購捏造為「展會」、「攤位承攬」或「策展」！
-4. 嚴禁憑空捏造非逐字稿提及的英文姓名或虛構職稱（如 Jennifer 導演等）！
-
-請直接輸出以下標準格式：
-# 📋 [會議主題] - 極簡精華紀錄
-> **會議日期**：[日期] | **地點**：[地點] | **出席人員**：[出席人員]
-
-## 🎯 一、30 秒核心決策與共識 (Key Decisions)
-（精簡列出最核心的 3~4 點定案事項，每點以【粗體標題】+ 1~2 句話結論呈現，末尾附時間戳如 [05:20]）
-
-## 📊 二、關鍵規格與技術參數指標 (Key Metrics)
-| 項目 | 核心規格 / 數值 | 實務說明與場域 | 時間出處 |
-| :--- | :---: | :--- | :---: |
-（僅列出本次對話中實際提及的 3~4 項核心數值、型號或工程參數，無則省略）
-
-## ✅ 三、行動追蹤矩陣 (Action Matrix)
-| 項次 | 具體待辦事項說明 | 優先級 | 負責人 | 預計完成時程 | 時間出處 |
-| :---: | :--- | :---: | :---: | :---: | :---: |
-（僅列出最核心的 3~5 項具體任務，優先級標註 [🔥最高]、[⚡高優先] 或 [📌中優先]）
-
-## ⚠️ 四、重點風險與下一步 (Next Steps)
-（1~2 點本次會議提及之實際風險與下步行動，附時間戳）
-
-【會議提煉事實清單】：
-${consolidatedFacts.slice(0, 16000)}`;
-
       const finalRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -520,40 +552,23 @@ ${consolidatedFacts.slice(0, 16000)}`;
           messages: [
             {
               role: "system",
-              content: "你是上市公司執行長特助，專門將各段會議事實綜合成 1 頁極簡、精準、事實嚴格接地、具備高度商業價值的決策紀要。嚴禁任何口語廢話與幻覺捏造。"
+              content: formalSystemPrompt
             },
-            { role: "user", content: reducePrompt }
+            {
+              role: "user",
+              content: `請根據以下【真實會議事實清單】，嚴格依據標準格式整理出正式會議紀錄：\n\n${consolidatedFacts.slice(0, 16000)}`
+            }
           ],
-          temperature: 0.1,
-          max_tokens: 1500
+          temperature: 0.2,
+          repeat_penalty: 1.18,
+          frequency_penalty: 0.3,
+          presence_penalty: 0.1,
+          max_tokens: 3500
         })
       });
 
       const finalData = await finalRes.json();
-      let polishedText = finalData?.choices?.[0]?.message?.content || "";
-
-      // Post-Processing Grounding Verifier (jt-doc-tools inspired)
-      if (!hasExhibitionKeywords && scenario !== "exhibition") {
-        const hadHallucination = /展會|攤位|策展|Jennifer/i.test(polishedText);
-        if (hadHallucination) {
-          console.warn("[Grounding Verifier] Filtered unauthorized exhibition hallucinations.");
-          polishedText = polishedText
-            .replace(/展會籌備與攤位承攬/g, "團隊聚會與活動安排")
-            .replace(/攤位承攬商/g, "場地合作單位")
-            .replace(/攤位數量/g, "預定桌數/席位")
-            .replace(/4\s*個攤位/g, "4 桌 (約 20 人)")
-            .replace(/展會晚宴/g, "團隊聚餐")
-            .replace(/展會進場/g, "聚餐進場")
-            .replace(/展會人員/g, "出席人員")
-            .replace(/展會相關協議書與租約/g, "案場協議書與租約")
-            .replace(/重點案場展覽合約/g, "重點案場工程合約")
-            .replace(/展會合約/g, "專案合約")
-            .replace(/展會策劃團隊/g, "行政團隊")
-            .replace(/Jennifer\s*導演[、與和]?/gi, "")
-            .replace(/攤位系統整合交付/g, "系統軟硬體整合交付")
-            .replace(/攤位/g, "席位");
-        }
-      }
+      const polishedText = finalData?.choices?.[0]?.message?.content?.trim() || "";
 
       return Response.json({
         choices: [
@@ -563,7 +578,8 @@ ${consolidatedFacts.slice(0, 16000)}`;
               content: polishedText
             }
           }
-        ]
+        ],
+        provider: "local-qwen"
       });
     } catch (err) {
       return Response.json({ error: String(err) }, { status: 500 });

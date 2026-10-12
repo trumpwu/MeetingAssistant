@@ -24,3 +24,9 @@ logs/
 *.log
 *.zip
 
+# Private Meeting records & internal datasets (keep local only)
+Meetings/
+TrainingData/*.md
+TrainingData/*.jsonl
+!TrainingData/.gitkeep
+process_*.ts
