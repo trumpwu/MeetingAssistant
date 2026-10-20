@@ -1,24 +1,21 @@
 # 🎙️ AI 智慧會議記錄助理 (AI Meeting Assistant)
 
-基於 **Qwen 2.5 7B Instruct (32K 超長上下文)** 與 **本地即時語音識別 / 翻譯引擎** 的高階離線商務會議助理系統。
+基於 **DeepSeek V4.1 Flash Free（OpenCode 免費雲端）** 與 **本地語音識別引擎** 的會議助理系統。
+
+> **現行 LLM**：OpenCode Zen 免費模型 `opencode/deepseek-v4.1-flash-free`（經本機 `opencode serve` :4096）。  
+> 語音轉錄（SenseVoice / Whisper）仍在本機；**會議摘要／翻譯會送上免費雲端**，免費期間資料可能用於模型改進——機密會議請改回本地 Qwen 或勿使用。
 
 ---
 
 ## 🌟 核心特色
 
 1. **雙核心 AI 架構**：
-   - **現場即時同傳**：支援麥克風與電腦分頁音訊（YouTube / Teams / Zoom），0.2 秒極速英翻繁中逐字稿。中英文模式智慧分流（中文專注逐字稿、英文自動顯示即時雙語字幕）。
-   - **深度高階會議紀錄**：搭載 `Qwen 2.5 7B` 地端大腦，支援 32,768 (32K) 超長上下文，自動過濾口語冗詞，提煉重大決策、數據指標與行動追蹤矩陣 (Action Matrix)。
-2. **🌐 全平台 AI 零門檻對接（一鍵打包 Prompt + 逐字稿）**：
-   - 內建「📋 一鍵複製繁中逐字稿 (貼至 AGY / Gemini 產出會議紀錄)」按鈕，自動打包繁中公文規範 Prompt 與乾淨逐字稿，直接貼入 Gemini 1.5 Pro、Claude 3.5 Sonnet 或 ChatGPT，30 秒直出正式商務公文會議紀錄。
-3. **👥 發言人智慧替換 (Speaker Mapping)**：
-   - 支援於左下角面板輸入同仁真實姓名，隨打隨換，秒速將整篇逐字稿中的 `Speaker X` 替換為實際出席者。
-4. **📧 Outlook 富文本與 EML / HTML 一鍵匯出**：
-   - 支援一鍵複製為標準 HTML 郵件格式，直接在 Outlook / Word 按 `Ctrl + V` 貼上，或使用 `scripts/export_to_outlook.ts` 匯出 `.eml` 郵件草稿與 `.html` 檔案。
-5. **100% 離線隱私安全**：
-   - 錄音檔與語音轉錄均於本地端（Localhost）執行，保障企業資訊安全。
-6. **一鍵跨電腦部署**：
-   - 內建 `install.bat`，新電腦下載後雙擊即可自動拉取所有依賴與 AI 模型。
+   - **現場即時同傳**：麥克風／分頁音訊；英文即時英翻繁中；中文 SenseVoice + 同音詞庫 + Qwen 雙層校準。
+   - **會議紀錄**：優先本機 Qwen 2.5（:8080）；未啟動時自動改用 **DeepSeek Free（OpenCode）**；亦可一鍵複製逐字稿貼 **Gemini**。
+2. **🌐 一鍵打包**：複製繁中逐字稿（Gemini / NotebookLM 格式）與「一鍵產出正式會議紀錄」並存。
+3. **👥 發言人對應**、**📧 Outlook / `scripts/export_to_outlook.ts`**、**會議專屬子資料夾存檔**。
+4. **啟動**：`Start_MeetingAssistant.bat`（一般視窗）／`AI智慧會議助理_桌面版.bat`（`--app`）；核心邏輯在 `MeetingAssistant_StartCore.bat`（`curl` 健康檢查，不依賴 PATH 的 `powershell`）。
+5. **健康檢查**：`http://127.0.0.1:18788/api/llm-status`（OpenCode 登入見 `OpenCode登入DeepSeek.bat`）。
 
 ---
 

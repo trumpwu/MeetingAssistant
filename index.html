@@ -14,7 +14,7 @@
         <div class="logo-icon">🎙️</div>
         <div>
           <h1 id="app-title">AI 智慧會議記錄助理</h1>
-          <p id="app-subtitle" class="subtitle">⚡ 英文/中文語音 ➔ 直接轉繁體中文逐字稿 • Qwen 2.5 本機秒級總結 • 100% 離線保密</p>
+          <p id="app-subtitle" class="subtitle">⚡ 英文/中文語音 ➔ 直接轉繁體中文逐字稿 • DeepSeek Free 本機秒級總結 • 100% 離線保密</p>
         </div>
       </div>
       <div class="header-actions">
@@ -22,9 +22,10 @@
         <div class="engine-select-group">
           <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 語音模式：</label>
           <select id="engine-mode-select" class="engine-select">
-            <option value="sensevoice" selected>🇹🇼 中文會議：SenseVoice 50x + Qwen 2.5 雙層校準 (推薦)</option>
-            <option value="sensevoice_fast">⚡ 中文會議：SenseVoice 極速原生 (免後處理)</option>
-            <option value="english_live">🌐 英文會議：即時同傳 (英翻繁中逐字稿 + Qwen 2.5 總結)</option>
+            <option value="sensevoice" selected>🇹🇼 中文會議：SenseVoice + Qwen 雙層校準 (推薦)</option>
+            <option value="sensevoice_fast">⚡ 中文會議：SenseVoice 極速 (免後處理)</option>
+            <option value="english_live">🌐 英文同傳：即時英翻繁中 + Whisper 精修</option>
+            <option value="whisper">🌐 英文同傳 (Whisper 離線精修備用)</option>
           </select>
         </div>
 
@@ -166,13 +167,15 @@
               </div>
             </div>
 
+            <div id="mic-permission-hint" class="mic-permission-hint" style="display: none;"></div>
             <div class="record-controls-row">
-              <button id="start-record-btn" class="btn btn-danger btn-lg">
+              <button id="start-record-btn" class="btn btn-danger btn-lg" type="button">
                 <span class="record-dot"></span> <span id="start-record-text">開始錄音</span>
               </button>
-              <button id="stop-record-btn" class="btn btn-secondary btn-lg" disabled>
+              <button id="stop-record-btn" class="btn btn-secondary btn-lg stop-record-btn" type="button" disabled aria-label="停止錄音">
                 ⏹️ <span id="stop-record-text">停止錄音</span>
               </button>
+              <button id="test-mic-btn" class="btn btn-outline btn-sm" type="button">🎤 測試麥克風</button>
               <div class="record-timer" id="record-timer">00:00:00</div>
             </div>
 
@@ -249,42 +252,48 @@
       <section class="panel right-panel">
         
         <!-- Step 3: Real-Time Traditional Chinese Transcript -->
-        <div class="card transcript-card">
+        <div class="card transcript-card" id="transcript-card">
           <div class="card-header">
             <span id="tag-step-3" class="card-tag">步驟 3</span>
-            <div class="header-with-badge">
+            <div class="header-with-badge" id="transcript-header-desc">
               <h2 id="title-step-3">📝 現場中文逐字稿 (英文/中文皆自動轉為繁中)</h2>
-              <span class="badge badge-chinese">100% 繁體中文</span>
+              <span class="badge badge-chinese" id="transcript-header-badge">100% 繁體中文</span>
             </div>
           </div>
           <div class="card-body">
-            <div class="transcript-toolbar">
-              <span class="transcript-stats" id="transcript-stats">字數：0 | 行數：0</span>
-              <div class="toolbar-btns">
-                <button id="clear-transcript-btn" class="btn-text">清空內容</button>
-              </div>
-            </div>
+            <p id="transcript-zh-hint" class="zh-transcript-hint" hidden>
+              🇹🇼 中文會議模式：錄音中不顯示逐字稿框；停止錄音後由本機 SenseVoice 自動產生繁中逐字稿。
+            </p>
 
-            <!-- Real-Time Instant Live Translation Subtitle Bar -->
-            <div class="live-subtitle-bar" id="live-subtitle-bar">
-              <div class="live-pulse-dot"></div>
-              <div class="live-text-wrap">
-                <span class="live-stream-tag">⚡ 實時同傳：</span>
-                <span id="live-stream-text" class="live-stream-text">（等待語音輸入，說話時繁體中文將隨聲即時逐字跳出...）</span>
+            <div id="live-transcript-panel">
+              <div class="transcript-toolbar">
+                <span class="transcript-stats" id="transcript-stats">字數：0 | 行數：0</span>
+                <div class="toolbar-btns">
+                  <button id="clear-transcript-btn" class="btn-text">清空內容</button>
+                </div>
               </div>
-            </div>
 
-            <textarea id="raw-transcript" class="form-control transcript-textarea" placeholder="現場錄音或上傳音檔後，無論說英文或中文，皆會自動翻譯為流暢繁體中文逐字稿出現在此處..."></textarea>
+              <!-- Real-Time Instant Live Translation Subtitle Bar -->
+              <div class="live-subtitle-bar" id="live-subtitle-bar">
+                <div class="live-pulse-dot"></div>
+                <div class="live-text-wrap">
+                  <span class="live-stream-tag">⚡ 實時同傳：</span>
+                  <span id="live-stream-text" class="live-stream-text">（等待語音輸入，說話時繁體中文將隨聲即時逐字跳出...）</span>
+                </div>
+              </div>
+
+              <textarea id="raw-transcript" class="form-control transcript-textarea" placeholder="現場錄音或上傳音檔後，無論說英文或中文，皆會自動翻譯為流暢繁體中文逐字稿出現在此處..."></textarea>
+            </div>
             
             <div class="generate-action-bar" style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px;">
               <button id="copy-transcript-clean-btn" class="btn btn-primary btn-xl" style="flex: 2; min-width: 280px; background: #2563eb; font-weight: 700;">
-                <span class="btn-icon">📋</span> <span>一鍵複製繁中逐字稿 (貼至 AGY / Gemini 產出會議紀錄)</span>
+                <span class="btn-icon">📋</span> <span>一鍵複製繁中逐字稿 (貼至 Gemini / NotebookLM)</span>
               </button>
               <button id="copy-notebooklm-top-btn" class="btn btn-outline btn-xl" style="flex: 1; min-width: 220px; border-color: #0284c7; color: #0369a1; font-weight: 700; background: #f0f9ff;">
                 <span class="btn-icon">📓</span> <span>複製 NotebookLM 格式</span>
               </button>
-              <button id="generate-summary-btn" class="btn btn-outline btn-sm" style="flex-basis: 100%; border-color: #cbd5e1; color: #64748b; font-size: 12.5px; padding: 6px 12px; margin-top: 4px;">
-                ⚙️ 本地/API 備用自動提煉（選用）
+              <button id="generate-summary-btn" class="btn btn-success btn-xl" style="flex-basis: 100%; font-weight: 700;">
+                <span class="btn-icon">⚡</span> <span id="generate-summary-text">一鍵產出正式會議紀錄 (DeepSeek / 本地 Qwen 自動切換)</span>
               </button>
             </div>
           </div>
@@ -306,7 +315,7 @@
             <!-- Rendered Markdown View -->
             <div id="tab-rendered" class="tab-content active">
               <div id="output-rendered" class="markdown-preview">
-                <p class="placeholder-text" id="placeholder-output">點擊上方「一鍵產出深度重點會議紀錄」，Qwen 2.5 本機 AI 將在 3 秒內提煉執行核心結論、待辦行動矩陣與關鍵指標...</p>
+                <p class="placeholder-text" id="placeholder-output">點擊上方「一鍵產出深度重點會議紀錄」，DeepSeek Free 本機 AI 將在 3 秒內提煉執行核心結論、待辦行動矩陣與關鍵指標...</p>
               </div>
             </div>
 
@@ -386,7 +395,7 @@
             <!-- Integrated AI Q&A Panel -->
             <div class="kb-ai-chat-box">
               <div class="kb-ai-header">
-                <span class="kb-ai-badge">🤖 詢問本機 Qwen 2.5 7B AI 大腦 (針對本篇會議)</span>
+                <span class="kb-ai-badge">🤖 詢問本機 DeepSeek Free 7B AI 大腦 (針對本篇會議)</span>
                 <div class="quick-chips">
                   <button class="chip-btn" data-q="請列出本場會議所有待辦事項、負責人與預計完成時程">📋 待辦事項清單</button>
                   <button class="chip-btn" data-q="請列出本場會議提及的所有財務金額、補助比率與關鍵數字">💰 金額與關鍵數據</button>
@@ -402,11 +411,13 @@
           </div>
         </div>
       </section>
+    </main>
+
     <!-- Persistent Live Diagnostic & Activity Log Bar -->
     <footer class="app-status-bar">
       <div class="status-indicators">
-        <span class="status-pill status-ok"><span class="dot"></span> Web 伺服器：127.0.0.1:8088</span>
-        <span class="status-pill status-ok"><span class="dot"></span> Qwen 2.5 AI 大腦：127.0.0.1:8080</span>
+        <span class="status-pill status-ok"><span class="dot"></span> Web 伺服器：127.0.0.1:18788</span>
+        <span class="status-pill status-ok" id="llm-status-pill"><span class="dot"></span> DeepSeek Free（OpenCode）：檢查中…</span>
         <span class="status-pill status-ok"><span class="dot"></span> Whisper 離線語音：就緒</span>
       </div>
       <div class="status-log-preview" id="status-log-preview">
@@ -458,6 +469,6 @@
     <div id="toast" class="toast"></div>
   </div>
 
-  <script src="app.js?v=20260914_4"></script>
+  <script src="app.js?v=20261020_merge"></script>
 </body>
 </html>

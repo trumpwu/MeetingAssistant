@@ -14,7 +14,7 @@ If Not fso.FileExists(edgePath) Then
 End If
 
 If fso.FileExists(edgePath) Then
-    WshShell.Run """" & edgePath & """ --app=http://localhost:8088/ --window-size=1280,850", 1, False
+    WshShell.Run """" & edgePath & """ --app=http://localhost:18788/ --window-size=1280,850", 1, False
 Else
-    WshShell.Run "http://localhost:8088/", 1, False
+    WshShell.Run "http://localhost:18788/", 1, False
 End If

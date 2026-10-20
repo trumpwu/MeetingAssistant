@@ -1,4 +1,4 @@
-$port = 8088
+$port = 18788
 $prefix = "http://localhost:$port/"
 $root = "D:\project\MeetingAssistant"
 $meetingsDir = "D:\project\Meetings"
