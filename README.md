@@ -9,16 +9,20 @@
 1. **雙核心 AI 架構**：
    - **現場即時同傳**：支援麥克風與電腦分頁音訊（YouTube / Teams / Zoom），0.2 秒極速英翻繁中逐字稿。中英文模式智慧分流（中文專注逐字稿、英文自動顯示即時雙語字幕）。
    - **深度高階會議紀錄**：搭載 `Qwen 2.5 7B` 地端大腦，支援 32,768 (32K) 超長上下文，自動過濾口語冗詞，提煉重大決策、數據指標與行動追蹤矩陣 (Action Matrix)。
-2. **🌐 全平台 AI 零門檻對接（一鍵打包 Prompt + 逐字稿）**：
+2. **🎯 NVIDIA Nemotron 3 智慧話者分離 (NeMo-Speech.cpp)**：
+   - 整合 NVIDIA 最新 Nemotron 3 Diarization 模型 (100M 參數，Streaming Sortformer v2) 與原生 C++ 推論庫。
+   - 完美解決多人會議「搶話、插話與聲音重疊 (Overlapping Speech)」痛點，自動為每段對話標註發言人時間軸 (`[Speaker 1]`、`[Speaker 2]`)，告別手動猜測。
+   - 支援 100% 本地 CPU 離線高速推論，無須 NVIDIA 獨顯亦可順暢運行。
+3. **🌐 全平台 AI 零門檻對接（一鍵打包 Prompt + 逐字稿）**：
    - 內建「📋 一鍵複製繁中逐字稿 (貼至 AGY / Gemini 產出會議紀錄)」按鈕，自動打包繁中公文規範 Prompt 與乾淨逐字稿，直接貼入 Gemini 1.5 Pro、Claude 3.5 Sonnet 或 ChatGPT，30 秒直出正式商務公文會議紀錄。
-3. **👥 發言人智慧替換 (Speaker Mapping)**：
+4. **👥 發言人智慧替換 (Speaker Mapping)**：
    - 支援於左下角面板輸入同仁真實姓名，隨打隨換，秒速將整篇逐字稿中的 `Speaker X` 替換為實際出席者。
-4. **📧 Outlook 富文本與 EML / HTML 一鍵匯出**：
+5. **📧 Outlook 富文本與 EML / HTML 一鍵匯出**：
    - 支援一鍵複製為標準 HTML 郵件格式，直接在 Outlook / Word 按 `Ctrl + V` 貼上，或使用 `scripts/export_to_outlook.ts` 匯出 `.eml` 郵件草稿與 `.html` 檔案。
-5. **100% 離線隱私安全**：
-   - 錄音檔與語音轉錄均於本地端（Localhost）執行，保障企業資訊安全。
-6. **一鍵跨電腦部署**：
-   - 內建 `install.bat`，新電腦下載後雙擊即可自動拉取所有依賴與 AI 模型。
+6. **100% 離線隱私安全**：
+   - 錄音檔、語音轉錄與話者分離均於本地端（Localhost）執行，保障企業資訊安全。
+7. **一鍵跨電腦部署**：
+   - 內建 `install.bat`，新電腦下載後雙擊即可自動拉取所有依賴、NeMo 引擎與 AI 模型。
 
 ---
 

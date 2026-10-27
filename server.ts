@@ -14,6 +14,136 @@ const senseVoiceCli = "D:\\project\\SenseVoice\\sherpa-onnx-v1.13.8-win-x64-shar
 const senseVoiceModel = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\model.int8.onnx";
 const senseVoiceTokens = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\tokens.txt";
 
+// NVIDIA NeMo-Speech / Nemotron 3 Diarization (Streaming Sortformer v2)
+const nemoSpeechCli = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin\\nemo-speech.exe";
+
+function hasNemotronCli(): boolean {
+  try {
+    return Deno.statSync(nemoSpeechCli).isFile;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function runNemotronDiarization(wavPath: string): Promise<Array<{ start: number; end: number; speaker: number }>> {
+  if (!hasNemotronCli()) return [];
+  try {
+    const stat = Deno.statSync(wavPath);
+    // 16kHz 16-bit mono WAV is ~1.92 MB per minute. Skip full-CPU diarization for files > 16 MB (~8.5 mins) so long meetings don't hang.
+    if (stat.size > 16 * 1024 * 1024) {
+      console.log(`[Nemotron] 音訊長度較長 (${(stat.size / 1024 / 1024).toFixed(1)} MB)，自動跳過 CPU 全域話者分離以確保 SenseVoice 50x 秒速出稿。`);
+      return [];
+    }
+    const nemoBinDir = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin";
+    const cmd = new Deno.Command(nemoSpeechCli, {
+      args: ["diarize", wavPath, "--format", "json"],
+      cwd: nemoBinDir,
+      signal: AbortSignal.timeout(25000)
+    });
+    const out = await cmd.output();
+    if (out.code === 0) {
+      const raw = new TextDecoder("utf-8").decode(out.stdout);
+      const jsonStart = raw.indexOf("{");
+      const jsonEnd = raw.lastIndexOf("}");
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        const jsonStr = raw.substring(jsonStart, jsonEnd + 1);
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed.segments)) {
+          return parsed.segments.map((s: any) => ({
+            start: Number(s.start),
+            end: Number(s.end),
+            speaker: Number(s.speaker)
+          }));
+        }
+      }
+    } else {
+      console.warn("[Nemotron] Diarize notice:", new TextDecoder().decode(out.stderr));
+    }
+  } catch (err) {
+    console.warn("[Nemotron] Diarize skipped/timeout:", err);
+  }
+  return [];
+}
+
+function alignSenseVoiceWithDiarization(
+  data: { text: string; timestamps?: number[]; tokens?: string[] },
+  chunkBaseSec: number = 0,
+  diarSegments: Array<{ start: number; end: number; speaker: number }>
+): string[] {
+  if (!data.text) return [];
+
+  if (!diarSegments || diarSegments.length === 0 || !data.tokens || !data.timestamps || data.tokens.length !== data.timestamps.length) {
+    return segmentSenseVoiceText(data).split("\n").filter(Boolean);
+  }
+
+  function getSpeakerAt(timeSec: number): number {
+    const matches = diarSegments.filter(s => timeSec >= s.start && timeSec <= s.end);
+    if (matches.length > 0) return matches[0].speaker;
+    let closest = diarSegments[0];
+    let minDiff = Infinity;
+    for (const s of diarSegments) {
+      const diff = Math.min(Math.abs(timeSec - s.start), Math.abs(timeSec - s.end));
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = s;
+      }
+    }
+    return closest ? closest.speaker : 1;
+  }
+
+  const utterances: Array<{ speaker: number; text: string; start: number }> = [];
+  let currentSpeaker = -1;
+  let currentText = "";
+  let currentStart = 0;
+  let lastTime = 0;
+
+  for (let i = 0; i < data.tokens.length; i++) {
+    const tok = data.tokens[i].replace(/<\|.*?\|>/g, "");
+    if (!tok) continue;
+    const absTime = chunkBaseSec + data.timestamps[i];
+    const spk = getSpeakerAt(absTime);
+
+    const isPause = (absTime - lastTime > 2.5) && currentText.length > 0;
+    const isSpeakerChange = spk !== currentSpeaker && currentText.length > 0;
+
+    if (isSpeakerChange || isPause) {
+      if (currentText.trim()) {
+        utterances.push({
+          speaker: currentSpeaker,
+          text: currentText.trim(),
+          start: currentStart
+        });
+      }
+      currentSpeaker = spk;
+      currentText = tok;
+      currentStart = absTime;
+    } else {
+      if (currentSpeaker === -1) {
+        currentSpeaker = spk;
+        currentStart = absTime;
+      }
+      currentText += tok;
+    }
+    lastTime = absTime;
+  }
+
+  if (currentText.trim()) {
+    utterances.push({
+      speaker: currentSpeaker,
+      text: currentText.trim(),
+      start: currentStart
+    });
+  }
+
+  return utterances.map(u => {
+    const min = Math.floor(u.start / 60);
+    const sec = Math.floor(u.start % 60);
+    const timeLabel = `[${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}]`;
+    const traditional = toTaiwanTraditional(u.text);
+    return `${timeLabel} [Speaker ${u.speaker}]: ${traditional}`;
+  });
+}
+
 function segmentSenseVoiceText(data: { text: string; timestamps?: number[]; tokens?: string[] }): string {
   if (!data.text) return "";
   if (data.tokens && data.timestamps && data.tokens.length === data.timestamps.length && data.tokens.length > 0) {
@@ -222,6 +352,25 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
       Deno.writeFileSync(inputPath, buffer);
 
+      // Convert full audio to 16kHz mono WAV for Nemotron Diarization
+      const toWavCmd = new Deno.Command(ffmpeg, {
+        args: ["-y", "-i", inputPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath]
+      });
+      await toWavCmd.output();
+
+      // Run NVIDIA Nemotron 3 Diarization if requested (default enabled)
+      let diarSegments: Array<{ start: number; end: number; speaker: number }> = [];
+      const reqDiarize = req.headers.get("X-Diarize");
+      const shouldDiarize = reqDiarize !== "false" && hasNemotronCli();
+      if (shouldDiarize) {
+        console.log(`[Diarize] 🚀 正在以 NVIDIA Nemotron 3 進行高精度話者分離 (Sortformer v2)...`);
+        diarSegments = await runNemotronDiarization(wavPath);
+        if (diarSegments.length > 0) {
+          const spkList = Array.from(new Set(diarSegments.map(s => s.speaker))).sort((a, b) => a - b);
+          console.log(`[Diarize] ✨ NVIDIA Nemotron 3 話者分離完成！識別到 ${spkList.length} 位發言人: ${spkList.map(s => "Speaker " + s).join(", ")}`);
+        }
+      }
+
       // 1. Slices audio into 120s chunks via FFmpeg (PCM 16kHz Mono)
       const chunkDir = `${tempDir}\\upload_${ts}_chunks`;
       try { Deno.mkdirSync(chunkDir, { recursive: true }); } catch (_) {}
@@ -298,7 +447,12 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
                 try {
                   const parsed = JSON.parse(trimmed);
                   if (parsed.text) {
-                    pieceText = segmentSenseVoiceText(parsed);
+                    if (diarSegments.length > 0) {
+                      const alignedLines = alignSenseVoiceWithDiarization(parsed, startSec, diarSegments);
+                      pieceText = alignedLines.join("\n");
+                    } else {
+                      pieceText = segmentSenseVoiceText(parsed);
+                    }
                     break;
                   }
                 } catch (_) {}
@@ -307,7 +461,11 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
           }
 
           if (pieceText) {
-            segmentTexts.push(`${timeLabel}${pieceText}`);
+            if (diarSegments.length > 0) {
+              segmentTexts.push(pieceText);
+            } else {
+              segmentTexts.push(`${timeLabel}${pieceText}`);
+            }
           }
 
           // Clean chunk file
@@ -317,9 +475,10 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         transcript = segmentTexts.join("\n\n");
       }
 
-      // Cleanup chunk dir and input path
+      // Cleanup chunk dir, wav, and input path
       try { Deno.removeSync(chunkDir, { recursive: true }); } catch (_) {}
       try { Deno.removeSync(inputPath); } catch (_) {}
+      try { Deno.removeSync(wavPath); } catch (_) {}
 
       // Convert to 100% Traditional Chinese (Taiwan Standard)
       if (transcript) {
@@ -370,7 +529,62 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         calibratedTranscript = await calibrateTranscript(transcript, isFast);
       }
 
-      return Response.json({ success: true, transcript: calibratedTranscript, raw_transcript: transcript, filename: rawFilename, engineUsed });
+      const detectedSpeakers = diarSegments.length > 0
+        ? Array.from(new Set(diarSegments.map(s => s.speaker))).sort((a, b) => a - b)
+        : [];
+
+      // Auto-persist transcript directly from backend to guarantee zero data loss
+      try {
+        const folderName = getMeetingFolderName(rawFilename);
+        const subDir = `${meetingsDir}\\${folderName}`;
+        Deno.mkdirSync(subDir, { recursive: true });
+        const autoTxtPath = `${subDir}\\${folderName}_(逐字稿).txt`;
+        Deno.writeTextFileSync(autoTxtPath, calibratedTranscript);
+        console.log(`[Transcribe] 💾 後端已自動歸檔逐字稿: ${autoTxtPath}`);
+      } catch (saveErr) {
+        console.warn("[Transcribe] Backend auto-save transcript notice:", saveErr);
+      }
+
+      return Response.json({
+        success: true,
+        transcript: calibratedTranscript,
+        raw_transcript: transcript,
+        filename: rawFilename,
+        engineUsed: diarSegments.length > 0 ? `${engineUsed} + NVIDIA Nemotron 3 話者分離` : engineUsed,
+        diarized: diarSegments.length > 0,
+        speakers: detectedSpeakers,
+        diarization_engine: diarSegments.length > 0 ? "NVIDIA Nemotron 3 Diarization (Sortformer v2)" : undefined
+      });
+    } catch (err) {
+      return Response.json({ success: false, error: String(err) });
+    }
+  }
+
+  // 1.1 API: /api/diarize-audio (Standalone NVIDIA Nemotron 3 Diarization)
+  if (pathname === "/api/diarize-audio" && req.method === "POST") {
+    try {
+      const buffer = new Uint8Array(await req.arrayBuffer());
+      const ts = Date.now();
+      const tempInput = `${tempDir}\\diar_${ts}_raw.tmp`;
+      const tempWav = `${tempDir}\\diar_${ts}_16k.wav`;
+      Deno.writeFileSync(tempInput, buffer);
+
+      const toWavCmd = new Deno.Command(ffmpeg, {
+        args: ["-y", "-i", tempInput, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", tempWav]
+      });
+      await toWavCmd.output();
+
+      const segments = await runNemotronDiarization(tempWav);
+      try { Deno.removeSync(tempInput); } catch (_) {}
+      try { Deno.removeSync(tempWav); } catch (_) {}
+
+      const speakers = Array.from(new Set(segments.map(s => s.speaker))).sort((a, b) => a - b);
+      return Response.json({
+        success: true,
+        segments,
+        speakers,
+        engine: "NVIDIA Nemotron 3 Diarization"
+      });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }
@@ -619,6 +833,49 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
       list.sort((a, b) => b.name.localeCompare(a.name));
       return Response.json({ success: true, files: list });
+    } catch (err) {
+      return Response.json({ success: false, error: String(err) });
+    }
+  }
+
+  // 3.1 API: /api/latest-transcript (Returns the most recent _(逐字稿).txt from Meetings directory)
+  if (pathname === "/api/latest-transcript" && req.method === "GET") {
+    try {
+      let latestFile = "";
+      let latestMtime = 0;
+      let latestName = "";
+
+      function scanTxt(dir: string, depth = 0) {
+        try {
+          for (const f of Deno.readDirSync(dir)) {
+            const full = `${dir}\\${f.name}`;
+            if (f.isFile && f.name.endsWith("_(逐字稿).txt")) {
+              const stat = Deno.statSync(full);
+              const mt = stat.mtime ? stat.mtime.getTime() : 0;
+              if (mt > latestMtime && stat.size > 10) {
+                latestMtime = mt;
+                latestFile = full;
+                latestName = f.name;
+              }
+            } else if (f.isDirectory && depth < 2 && !f.name.startsWith(".")) {
+              scanTxt(full, depth + 1);
+            }
+          }
+        } catch (_) {}
+      }
+
+      scanTxt(meetingsDir, 0);
+      if (latestFile) {
+        const content = Deno.readTextFileSync(latestFile);
+        return Response.json({
+          success: true,
+          filename: latestName,
+          path: latestFile,
+          mtime: latestMtime,
+          transcript: content
+        });
+      }
+      return Response.json({ success: false });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }

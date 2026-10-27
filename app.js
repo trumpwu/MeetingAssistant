@@ -494,13 +494,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Start Recording (Microphone or YouTube / System Tab Audio) ---
   async function startRecording() {
-    const selectedSource = document.querySelector('input[name="audio-source"]:checked').value;
+    const selectedSource = document.querySelector('input[name="audio-source"]:checked')?.value || 'mic';
     let stream = null;
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showToast('⚠️ 瀏覽器未開放音訊權限，請確認透過 http://127.0.0.1:8088/ 開啟會議助理！', 6000);
+      return;
+    }
 
     try {
       if (selectedSource === 'system') {
         // Capture YouTube / Tab System Audio
         showToast('請在彈出視窗選擇「分頁 (Tab - 如 YouTube)」並勾選「共用分頁音訊」！', 5000);
+        if (!navigator.mediaDevices.getDisplayMedia) {
+          throw new Error('當前環境不支援分頁音訊擷取，請改選「🎤 麥克風」模式！');
+        }
         stream = await navigator.mediaDevices.getDisplayMedia({
           audio: {
             echoCancellation: false,
@@ -510,17 +518,32 @@ document.addEventListener('DOMContentLoaded', () => {
           video: true
         });
       } else {
-        // Capture Microphone
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true
-          }
-        });
+        // Capture Microphone with fallback
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true
+            }
+          });
+        } catch (constraintErr) {
+          console.warn('進階降噪約束失敗，退回基本音訊串流模式:', constraintErr);
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
       }
 
       audioChunks = [];
-      mediaRecorder = new MediaRecorder(stream);
+      let mimeType = 'audio/webm';
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        }
+      }
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -529,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       mediaRecorder.onstop = async () => {
-        recordedBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        recordedBlob = new Blob(audioChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
         const audioUrl = URL.createObjectURL(recordedBlob);
         audioPlayer.src = audioUrl;
         
@@ -582,33 +605,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
           const t0 = Date.now();
+          const diarizeEnabled = document.getElementById('enable-nemotron-diarize')?.checked !== false;
           const res = await fetch('/api/transcribe-file', {
             method: 'POST',
             headers: {
               'X-Filename': encodeURIComponent(`${currentFilename}.webm`),
-              'X-Engine': currentEngine
+              'X-Engine': currentEngine,
+              'X-Diarize': diarizeEnabled ? 'true' : 'false'
             },
             body: recordedBlob
           });
           const data = await res.json();
           const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
           if (data.success && data.transcript) {
-            let curSpeaker = 1;
-            const formatted = data.transcript
-              .split('\n')
-              .map(l => l.trim())
-              .filter(l => l.length > 0)
-              .map((l, i) => {
-                const clean = l.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
-                if (!clean) return '';
-                const spk = `[Speaker ${curSpeaker}]`;
-                if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
-                  curSpeaker = curSpeaker === 1 ? 2 : 1;
-                }
-                return `[發言 ${i + 1}] ${spk}: ${clean}`;
-              })
-              .filter(l => l.length > 0)
-              .join('\n');
+            let formatted = '';
+            if (data.diarized) {
+              // Real neural speaker diarization from NVIDIA Nemotron 3
+              formatted = data.transcript
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 0)
+                .map((l, i) => {
+                  if (l.includes('[Speaker ')) return `[發言 ${i + 1}] ${l}`;
+                  return `[發言 ${i + 1}] [Speaker 1]: ${l}`;
+                })
+                .join('\n');
+
+              const diarizeBadge = document.getElementById('diarize-status-badge');
+              if (diarizeBadge) {
+                diarizeBadge.style.display = 'inline-block';
+                diarizeBadge.textContent = `🎯 NVIDIA 識別出 ${data.speakers ? data.speakers.length : ''} 位發言人`;
+              }
+            } else {
+              let curSpeaker = 1;
+              formatted = data.transcript
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 0)
+                .map((l, i) => {
+                  const clean = l.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
+                  if (!clean) return '';
+                  const spk = `[Speaker ${curSpeaker}]`;
+                  if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
+                    curSpeaker = curSpeaker === 1 ? 2 : 1;
+                  }
+                  return `[發言 ${i + 1}] ${spk}: ${clean}`;
+                })
+                .filter(l => l.length > 0)
+                .join('\n');
+            }
+
+            if (data.diarized && Array.isArray(data.speakers) && data.speakers.length > 0) {
+              setTimeout(() => { if (typeof autoDetectSpeakers === 'function') autoDetectSpeakers(); }, 200);
+            }
             
             // If English live translation already captured a solid transcript, preserve it or complement it
             if (isEngMode && existingLive && existingLive.length > 80 && !existingLive.includes('[系統提示]')) {
@@ -684,7 +733,26 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('🔴 錄音與即時辨識已啟動！');
     } catch (err) {
       console.error('Audio capture error:', err);
-      showToast('⚠️ 無法存取音訊裝置，請檢查麥克風或螢幕分頁音訊權限！');
+      isRecording = false;
+      clearInterval(recordInterval);
+      startRecordBtn.disabled = false;
+      stopRecordBtn.disabled = true;
+      recordStatusBadge.textContent = '待命';
+      recordStatusBadge.className = 'badge badge-idle';
+      waveContainer.classList.remove('recording');
+      waveText.textContent = '錄音已取消';
+
+      let msg = '⚠️ 無法存取音訊裝置，請檢查麥克風或螢幕分頁音訊權限！';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = '⚠️ 麥克風權限被封鎖！請至瀏覽器網址列左側點擊「鎖頭/網站權限」，將麥克風設為「允許」後重新整理！';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = '⚠️ 未偵測到可用的麥克風！請檢查耳機或麥克風是否已接妥電腦。';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        msg = '⚠️ 麥克風正被其他程式 (如 Teams/Zoom/錄音軟體) 佔用，請先關閉其他軟體！';
+      } else if (err.message) {
+        msg = `⚠️ 錄音啟動失敗：${err.message}`;
+      }
+      showToast(msg, 6500);
     }
   }
 
@@ -792,37 +860,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const t0 = Date.now();
+      const diarizeEnabled = document.getElementById('enable-nemotron-diarize')?.checked !== false;
       const res = await fetch('/api/transcribe-file', {
         method: 'POST',
         headers: {
           'X-Filename': encodeURIComponent(file.name),
-          'X-Engine': currentEngine
+          'X-Engine': currentEngine,
+          'X-Diarize': diarizeEnabled ? 'true' : 'false'
         },
         body: file
       });
       const data = await res.json();
       const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
       if (data.success && data.transcript) {
-        let curSpeaker = 1;
-        const formatted = data.transcript
-          .split('\n')
-          .map(line => line.trim())
-          .filter(line => line.length > 0)
-          .map((line, idx) => {
-            const clean = line.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
-            if (!clean) return '';
-            const spk = `[Speaker ${curSpeaker}]`;
-            if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
-              curSpeaker = curSpeaker === 1 ? 2 : 1;
-            }
-            return `[語音匯入 ${idx + 1}] ${spk}: ${clean}`;
-          })
-          .filter(l => l.length > 0)
-          .join('\n');
+        let formatted = '';
+        if (data.diarized) {
+          // Real neural speaker diarization from NVIDIA Nemotron 3
+          formatted = data.transcript
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .map((line, idx) => {
+              if (line.includes('[Speaker ')) return `[語音匯入 ${idx + 1}] ${line}`;
+              return `[語音匯入 ${idx + 1}] [Speaker 1]: ${line}`;
+            })
+            .join('\n');
+
+          const diarizeBadge = document.getElementById('diarize-status-badge');
+          if (diarizeBadge) {
+            diarizeBadge.style.display = 'inline-block';
+            diarizeBadge.textContent = `🎯 NVIDIA 識別出 ${data.speakers ? data.speakers.length : ''} 位發言人`;
+          }
+        } else {
+          let curSpeaker = 1;
+          formatted = data.transcript
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .map((line, idx) => {
+              const clean = line.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
+              if (!clean) return '';
+              const spk = `[Speaker ${curSpeaker}]`;
+              if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
+                curSpeaker = curSpeaker === 1 ? 2 : 1;
+              }
+              return `[語音匯入 ${idx + 1}] ${spk}: ${clean}`;
+            })
+            .filter(l => l.length > 0)
+            .join('\n');
+        }
 
         rawTranscript.value = (rawTranscript.value ? rawTranscript.value + '\n\n' : '') + formatted;
         rawTranscript.scrollTop = rawTranscript.scrollHeight;
         updateTranscriptStats();
+
+        if (data.diarized && Array.isArray(data.speakers) && data.speakers.length > 0) {
+          setTimeout(() => { if (typeof autoDetectSpeakers === 'function') autoDetectSpeakers(); }, 200);
+        }
+
         showToast(`✨ 成功以 ${data.engineUsed || engineLabel} 轉錄 ${file.name} (耗時 ${elapsedSec}s)！可直接產出重點會議紀錄！`, 5000);
       } else {
         showToast(`❌ 轉錄失敗：${data.error || '無法辨識音訊內容'}`);
@@ -1844,7 +1939,7 @@ ${processedTranscript}`;
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             type: 'thumbs_up_exemplar',
-            topic: meetingTitleInput ? meetingTitleInput.value.trim() : '微電網專案會議',
+            topic: titleInput ? titleInput.value.trim() : '微電網專案會議',
             rawTranscript: rawTranscript ? rawTranscript.value : '',
             editedContent: currentOutput
           })
@@ -1862,11 +1957,44 @@ ${processedTranscript}`;
         rlFeedbackBtn.disabled = false;
         rlFeedbackBtn.innerHTML = '🧠 👍 納入 AI 強化學習 (標竿範例)';
       }
+    });
+  }
+
+  // ==========================================
+  // Safe Clipboard Copy Helper (with Fallback)
+  // ==========================================
+  async function copyTextSafe(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        console.warn('Clipboard API failed, falling back to execCommand:', err);
+      }
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      console.error('Fallback copy failed:', e);
+      return false;
+    }
+  }
+
   // ==========================================
   // NotebookLM Source Formatter & Exporter
   // ==========================================
   function generateNotebookLMSource(title, transcript, minutes) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
     return `# 【會議知識庫文件】${title || '商務會議'}
 會議時間：${today}
 文件性質：正式會議紀錄與原始時間戳記逐字稿（NotebookLM / Gemini 來源專用）
@@ -1884,13 +2012,49 @@ ${transcript || '（無逐字稿內容）'}
   }
 
   // ==========================================
+  // Visual Copy Confirmation Helper
+  // ==========================================
+  const copyStatusBanner = document.getElementById('copy-status-banner');
+  const copyStatusText = document.getElementById('copy-status-text');
+
+  function showCopySuccessVisual(btn, charCount, modeLabel) {
+    const timeStr = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    if (copyStatusBanner && copyStatusText) {
+      copyStatusBanner.style.display = 'flex';
+      copyStatusText.textContent = `✅ 【${modeLabel} 複製成功！】時間：${timeStr} ｜ 共 ${charCount.toLocaleString()} 字 👉 現在請直接切換至 Gemini / NotebookLM 按 Ctrl + V 貼上！`;
+    }
+    if (btn) {
+      if (!btn.dataset.origHtml) {
+        btn.dataset.origHtml = btn.innerHTML;
+        btn.dataset.origBg = btn.style.background || '';
+        btn.dataset.origColor = btn.style.color || '';
+        btn.dataset.origBorder = btn.style.borderColor || '';
+      }
+      btn.innerHTML = `✅ 已成功複製！（共 ${charCount.toLocaleString()} 字，請直接按 Ctrl+V）`;
+      btn.style.background = '#16a34a';
+      btn.style.color = '#ffffff';
+      btn.style.borderColor = '#15803d';
+      if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+      btn._copyResetTimer = setTimeout(() => {
+        btn.innerHTML = btn.dataset.origHtml;
+        btn.style.background = btn.dataset.origBg;
+        btn.style.color = btn.dataset.origColor;
+        btn.style.borderColor = btn.dataset.origBorder;
+      }, 4500);
+    }
+  }
+
+  // ==========================================
   // Clean Transcript Copy for AGY / Gemini Direct Paste
   // ==========================================
   const copyTranscriptCleanBtn = document.getElementById('copy-transcript-clean-btn');
   if (copyTranscriptCleanBtn) {
     copyTranscriptCleanBtn.addEventListener('click', async () => {
       applySpeakerMappingToTranscript();
-      const title = meetingTitleInput ? meetingTitleInput.value.trim() : '會議討論';
+      const title = (titleInput && titleInput.value.trim()) ? titleInput.value.trim() : '會議討論';
+      const mDate = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
+      const mLoc = (locationInput && locationInput.value.trim()) ? locationInput.value.trim() : '公司會議室';
+      const mAtt = (attendeesInput && attendeesInput.value.trim()) ? attendeesInput.value.trim() : '與會人員';
       const transcript = rawTranscript ? rawTranscript.value.trim() : '';
 
       if (!transcript) {
@@ -1905,8 +2069,9 @@ ${transcript || '（無逐字稿內容）'}
 
 | 項目 | 內容 |
 | :--- | :--- |
-| **會議日期** | ${new Date().toISOString().split('T')[0]} |
-| **會議地點** | 公司會議室 |
+| **會議日期** | ${mDate} |
+| **會議地點** | ${mLoc} |
+| **出席人員** | ${mAtt} |
 | **會議目的** | [依據對話脈絡歸納核心召開緣由與目標] |
 
 ---
@@ -1935,10 +2100,52 @@ ${transcript || '（無逐字稿內容）'}
 【會議逐字稿如下】：
 ${transcript}
 `;
-      try {
-        await navigator.clipboard.writeText(formatted);
-        showToast('📋 已複製【逐字稿＋專業會議Prompt】！直接在 Gemini / ChatGPT / Claude 按 Ctrl+V 貼上即可秒出正式會議紀錄！', 6000);
-      } catch (_) {
+      const copied = await copyTextSafe(formatted);
+      if (copied) {
+        showCopySuccessVisual(copyTranscriptCleanBtn, formatted.length, '正式會議紀錄 Prompt＋逐字稿');
+        showToast('📋 已複製【逐字稿＋正式會議Prompt】！直接在 Gemini / ChatGPT 按 Ctrl+V 貼上即可！', 6000);
+      } else {
+        showToast('❌ 複製失敗，請手動選取複製！');
+      }
+    });
+  }
+
+  // ==========================================
+  // Outlook Concise Email Prompt Copy Button
+  // ==========================================
+  const copyOutlookPromptBtn = document.getElementById('copy-outlook-prompt-btn');
+  if (copyOutlookPromptBtn) {
+    copyOutlookPromptBtn.addEventListener('click', async () => {
+      applySpeakerMappingToTranscript();
+      const title = (titleInput && titleInput.value.trim()) ? titleInput.value.trim() : '會議討論';
+      const mDate = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
+      const transcript = rawTranscript ? rawTranscript.value.trim() : '';
+
+      if (!transcript) {
+        showToast('⚠️ 目前逐字稿尚無內容，請先錄音或匯入音檔！', 3000);
+        return;
+      }
+
+      const formatted = `請根據以下會議逐字稿，為我整理一份【極簡、重點條列、適合直接複製貼進 Outlook 信件寄給主管與同仁】的台灣繁體中文會議紀錄。
+
+【格式要求】：
+主旨：【會議紀錄】${mDate} ${title}
+
+各位主管、同仁好，
+今日（${mDate}）會議重點摘要如下：
+
+一、 核心議題與討論結論（條列重點、關鍵金額與數據，精簡扼要）
+二、 重要決議事項
+三、 後續待辦事項 (Next Steps)（標明【負責方/人員】與具體行動）
+
+【會議逐字稿如下】：
+${transcript}
+`;
+      const copied = await copyTextSafe(formatted);
+      if (copied) {
+        showCopySuccessVisual(copyOutlookPromptBtn, formatted.length, 'Outlook 極簡版 Prompt＋逐字稿');
+        showToast('📧 已複製【Outlook 極簡信件版 Prompt＋逐字稿】！貼給線上 AI 即可秒出信件格式！', 6000);
+      } else {
         showToast('❌ 複製失敗，請手動選取複製！');
       }
     });
@@ -1947,8 +2154,9 @@ ${transcript}
   const copyNotebooklmBtn = document.getElementById('copy-notebooklm-btn');
   const copyNotebooklmTopBtn = document.getElementById('copy-notebooklm-top-btn');
 
-  const handleCopyNotebookLM = async () => {
-    const title = meetingTitleInput ? meetingTitleInput.value.trim() : '會議紀錄';
+  const handleCopyNotebookLM = async (e) => {
+    applySpeakerMappingToTranscript();
+    const title = (titleInput && titleInput.value.trim()) ? titleInput.value.trim() : '會議紀錄';
     const transcript = rawTranscript ? rawTranscript.value.trim() : '';
     const minutes = outputMarkdown ? outputMarkdown.value.trim() : '';
 
@@ -1958,10 +2166,12 @@ ${transcript}
     }
 
     const formatted = generateNotebookLMSource(title, transcript, minutes);
-    try {
-      await navigator.clipboard.writeText(formatted);
+    const copied = await copyTextSafe(formatted);
+    if (copied) {
+      const targetBtn = (e && e.currentTarget) ? e.currentTarget : copyNotebooklmTopBtn;
+      showCopySuccessVisual(targetBtn, formatted.length, 'NotebookLM 來源格式');
       showToast('📓 已複製 NotebookLM 專用來源格式！前往 NotebookLM 新增來源貼上即可！', 4500);
-    } catch (_) {
+    } else {
       showToast('❌ 複製失敗，請手動複製！');
     }
   };
@@ -1978,10 +2188,10 @@ ${transcript}
       }
       const title = kbDocTitle ? kbDocTitle.textContent.trim() : '歷史會議紀錄';
       const formatted = generateNotebookLMSource(title, '', currentKbDoc);
-      try {
-        await navigator.clipboard.writeText(formatted);
+      const copied = await copyTextSafe(formatted);
+      if (copied) {
         showToast('📓 已複製 NotebookLM 專用格式！直接貼入 NotebookLM 即可進行問答！', 4500);
-      } catch (_) {
+      } else {
         showToast('❌ 複製失敗！');
       }
     });
@@ -2051,5 +2261,93 @@ ${transcript}
       if (aiSettingsModal) aiSettingsModal.style.display = 'none';
     });
   }
+
+  // Auto-restore most recent transcript from today so refreshing the browser never loses the last recording's transcript
+  function loadLatestTranscript(force = false) {
+    fetch('/api/latest-transcript')
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.success && data.transcript && rawTranscript) {
+          const curVal = rawTranscript.value.trim();
+          const isPlaceholder = !curVal || curVal.includes('[系統提示]');
+          const ageMs = Date.now() - (data.mtime || 0);
+          if (force || (isPlaceholder && ageMs < 12 * 3600 * 1000)) {
+            rawTranscript.value = data.transcript;
+            updateTranscriptStats();
+            showToast(`✨ 已載入最新轉錄逐字稿：${data.filename}`, 4000);
+          }
+        } else if (force) {
+          showToast('⚠️ 尚未找到歷史逐字稿檔案！', 3000);
+        }
+      })
+      .catch(() => {});
+  }
+
+  const reloadLatestTranscriptBtn = document.getElementById('reload-latest-transcript-btn');
+  if (reloadLatestTranscriptBtn) {
+    reloadLatestTranscriptBtn.addEventListener('click', () => loadLatestTranscript(true));
+  }
+
+  // --- Start a Brand New Meeting (Reset All Fields, Audio, Speakers & Transcript) ---
+  if (newMeetingBtn) {
+    newMeetingBtn.addEventListener('click', () => {
+      if (isRecording) {
+        stopRecording();
+      }
+
+      // 1. Clear transcript & output
+      if (rawTranscript) {
+        rawTranscript.value = '';
+        updateTranscriptStats();
+      }
+      if (outputMarkdown) outputMarkdown.value = '';
+      if (outputRendered) outputRendered.innerHTML = '';
+      if (copyStatusBanner) copyStatusBanner.style.display = 'none';
+      if (liveStreamText) {
+        liveStreamText.textContent = '（等待語音輸入，說話時繁體中文字幕將即時跳出...）';
+      }
+
+      // 2. Reset recorded audio & timer
+      recordedBlob = null;
+      audioChunks = [];
+      clearInterval(recordInterval);
+      if (recordTimer) recordTimer.textContent = '00:00:00';
+      if (recordStatusBadge) {
+        recordStatusBadge.textContent = '待命';
+        recordStatusBadge.className = 'badge badge-idle';
+      }
+      if (waveContainer) waveContainer.classList.remove('recording');
+      if (waveText) waveText.textContent = '語音即時監聽待命中';
+      if (audioPlayer) audioPlayer.src = '';
+      if (audioSizeDisplay) audioSizeDisplay.textContent = '0.0 MB';
+      if (recordedAudioContainer) recordedAudioContainer.style.display = 'none';
+      if (audioFileInput) audioFileInput.value = '';
+      if (fileTranscribeProgress) fileTranscribeProgress.style.display = 'none';
+
+      // 3. Reset speaker mapping list to default Speaker 1 & Speaker 2
+      if (speakerList) {
+        speakerList.innerHTML = '';
+        addSpeakerRow('Speaker 1', '');
+        addSpeakerRow('Speaker 2', '');
+      }
+      const diarizeBadge = document.getElementById('diarize-status-badge');
+      if (diarizeBadge) diarizeBadge.style.display = 'none';
+
+      // 4. Refresh current date & time
+      const cur = new Date();
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, '0');
+      const d = String(cur.getDate()).padStart(2, '0');
+      const h = String(cur.getHours()).padStart(2, '0');
+      const minStr = String(cur.getMinutes()).padStart(2, '0');
+      if (dateInput) dateInput.value = `${y}-${m}-${d}`;
+      if (timeInput) timeInput.value = `${h}:${minStr}`;
+      updateFilename();
+
+      showToast('✨ 已開啟新會議！逐字稿、錄音與發言人設定已全部清空重置。', 3500);
+    });
+  }
 });
+
+
 

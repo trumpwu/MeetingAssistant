@@ -71,8 +71,22 @@ if not exist "%MODELS_DIR%\%MODEL_FILE%" (
 echo  核心 AI 模型 [%MODEL_FILE%] 就緒！
 echo.
 
-:: 4. 編譯與建立原生 Windows 桌面主程式 (.exe) 與訓練工具
-echo [4/4] 正在封裝原生 Windows 桌面程式與自動微調工具...
+:: 4. NVIDIA Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)
+echo [4/5] 檢查 NVIDIA Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)...
+if not exist "%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" (
+    echo 正在下載 NeMo-Speech.cpp 引擎 (CPU 版)...
+    if not exist "%BASE_DIR%\NeMo-Speech" mkdir "%BASE_DIR%\NeMo-Speech"
+    curl -L -o "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.2.0/nemo-speech-0.2.0-windows-x86_64-cpu.zip" --progress-bar
+    tar -xf "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" -C "%BASE_DIR%\NeMo-Speech"
+    del "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip"
+    echo 正在拉取 Nemotron 3 Diarization 輕量模型 (102 MB)...
+    "%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3-diarization
+)
+echo  NVIDIA Nemotron 3 話者分離引擎就緒！
+echo.
+
+:: 5. 編譯與建立原生 Windows 桌面主程式 (.exe) 與訓練工具
+echo [5/5] 正在封裝原生 Windows 桌面程式與自動微調工具...
 if not exist "%APP_DIR%\TrainingData" mkdir "%APP_DIR%\TrainingData"
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:"%APP_DIR%\AI智慧會議助理.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "%APP_DIR%\Launcher.cs" >nul 2>&1
 copy /Y "%APP_DIR%\AI智慧會議助理.exe" "%USERPROFILE%\Desktop\AI智慧會議助理.exe" >nul

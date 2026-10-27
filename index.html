@@ -13,23 +13,22 @@
       <div class="logo-group">
         <div class="logo-icon">🎙️</div>
         <div>
-          <h1 id="app-title">AI 智慧會議記錄助理</h1>
-          <p id="app-subtitle" class="subtitle">⚡ 英文/中文語音 ➔ 直接轉繁體中文逐字稿 • Qwen 2.5 本機秒級總結 • 100% 離線保密</p>
+          <h1 id="app-title">AI 智慧會議逐字稿助理</h1>
+          <p id="app-subtitle" class="subtitle">⚡ 現場錄音 / 音檔極速轉繁中逐字稿 • 英文會議即時字幕 • 一鍵複製貼上線上 Gemini / NotebookLM</p>
         </div>
       </div>
       <div class="header-actions">
         <!-- Speech Model Selector -->
         <div class="engine-select-group">
-          <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 語音模式：</label>
+          <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 會議語言模式：</label>
           <select id="engine-mode-select" class="engine-select">
-            <option value="sensevoice" selected>🇹🇼 中文會議：SenseVoice 50x + Qwen 2.5 雙層校準 (推薦)</option>
-            <option value="sensevoice_fast">⚡ 中文會議：SenseVoice 極速原生 (免後處理)</option>
-            <option value="english_live">🌐 英文會議：即時同傳 (英翻繁中逐字稿 + Qwen 2.5 總結)</option>
+            <option value="sensevoice" selected>🇹🇼 中文 / 中英混合會議（免字幕 • 極速產出繁中逐字稿）</option>
+            <option value="english_live">🌐 英文會議（開啟英文翻中文即時字幕 + 逐字稿）</option>
           </select>
         </div>
 
-        <button id="ai-settings-btn" class="btn btn-outline" style="border-color:#3b82f6; color:#1d4ed8; font-weight:700;">
-          ⚙️ AI 引擎 (Gemini / 本地)
+        <button id="ai-settings-btn" class="btn btn-outline" style="display: none;">
+          ⚙️ AI 引擎
         </button>
 
         <button id="global-download-audio-btn" class="btn btn-success">
@@ -39,17 +38,21 @@
         <button id="new-meeting-btn" class="btn btn-outline">
           <span class="btn-icon">➕</span> <span id="new-meeting-btn-text">開啟新會議</span>
         </button>
+
+        <button id="refresh-app-btn" class="btn btn-outline" onclick="location.reload()" title="重新載入介面與最新設定">
+          🔄 重新整理
+        </button>
       </div>
     </header>
 
-    <!-- Navigation Tabs -->
-    <nav class="top-nav">
+    <!-- Navigation Tabs (Hidden to keep single-page simplicity) -->
+    <nav class="top-nav" style="display: none;">
       <div style="display: flex; gap: 8px;">
         <button class="nav-tab-btn active" id="nav-live-tab" data-nav="live-section">
           🎙️ 即時同傳與會議錄音
         </button>
         <button class="nav-tab-btn" id="nav-kb-tab" data-nav="kb-section">
-          📚 歷史會議庫與 AI 對話 (免設定直接開)
+          📚 歷史會議庫
         </button>
       </div>
     </nav>
@@ -63,7 +66,7 @@
         <div class="card">
           <div class="card-header">
             <span id="tag-step-1" class="card-tag">步驟 1</span>
-            <h2 id="title-step-1">📅 會議基本資訊與存檔路徑</h2>
+            <h2 id="title-step-1">📅 會議基本資訊</h2>
           </div>
           <div class="card-body">
             <div class="form-grid">
@@ -92,28 +95,23 @@
 
             <div class="form-group">
               <label id="label-title" for="meeting-title">會議主題</label>
-              <input type="text" id="meeting-title" class="form-control" placeholder="例如：跨部門季度專案討論會">
+              <input type="text" id="meeting-title" class="form-control" placeholder="例如：跨部門專案討論會">
             </div>
 
             <div class="form-group">
               <label id="label-attendees" for="meeting-attendees">出席人員 / 記錄者</label>
-              <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：王專案經理、原廠講師、專案團隊">
+              <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：張主管、李工程師、專案團隊">
             </div>
 
-            <div class="form-group">
-              <label id="label-scenario" for="meeting-scenario">🎯 會議情境模式 (借鑑 JT-Whisper 自動感知)</label>
+            <div class="form-group" style="display: none;">
+              <label id="label-scenario" for="meeting-scenario">🎯 會議情境模式</label>
               <select id="meeting-scenario" class="form-control">
-                <option value="auto" selected>✨ 自動情境識別 (根據逐字稿對話動態判斷，推薦)</option>
-                <option value="weekly">🏢 內部常態週會 / 營運進度列管 (同仁進度、活動聚會、行政待辦)</option>
-                <option value="tech">💻 研發技術架構 / 系統審查對齊 (系統選型、API、測試除錯、資安)</option>
-                <option value="engineering">⚡ 案場工程交付 / 硬體裝機驗收 (合約審查、配電圖、工期排程)</option>
-                <option value="business">🤝 商務合作洽談 / 客戶需求對齊 (商業模式、合約條款、收費交付)</option>
-                <option value="exhibition">🎪 公眾展會 / 大型對外活動籌備 (僅在確為展覽宣傳時選用)</option>
+                <option value="auto" selected>✨ 自動情境識別</option>
               </select>
             </div>
 
-            <!-- Auto-Generated File Name -->
-            <div class="filename-box">
+            <!-- Auto-Generated File Name (Hidden from UI clutter, kept for auto-naming files) -->
+            <div class="filename-box" style="display: none;">
               <div class="filename-label">
                 <span id="label-auto-filename">📁 自動標準檔案名稱：</span>
                 <button id="copy-filename-btn" class="btn-text">複製檔名</button>
@@ -127,7 +125,7 @@
             <!-- Custom Save Directory Path -->
             <div class="save-path-box">
               <div class="filename-label">
-                <span id="label-save-path">📂 自訂存檔儲存路徑 (可自選或點擊切換)：</span>
+                <span id="label-save-path">📂 錄音與逐字稿自動存檔位置：</span>
               </div>
               <div class="path-input-group">
                 <input type="text" id="custom-save-path" class="form-control path-input" value="D:\project\Meetings" placeholder="輸入或貼上路徑，例如：D:\project\Meetings">
@@ -201,6 +199,15 @@
               </button>
             </div>
 
+            <!-- NVIDIA Nemotron 3 Diarization Toggle & Badge -->
+            <div class="diarize-toggle-row">
+              <label class="toggle-checkbox-label">
+                <input type="checkbox" id="enable-nemotron-diarize" checked>
+                <span>🎯 啟用 NVIDIA Nemotron 3 智慧話者分離 (多人會議重疊發言與分軌識別)</span>
+              </label>
+              <span class="badge-nvidia">🟢 NVIDIA NeMo 100M 就緒</span>
+            </div>
+
             <!-- Drag & Drop Audio/Video File to Direct Transcribe -->
             <div class="file-dropzone" id="file-dropzone">
               <div class="dropzone-icon">📁</div>
@@ -212,7 +219,7 @@
               <button type="button" id="browse-file-btn" class="btn btn-outline btn-sm">選擇 M4A / 影音檔案</button>
             </div>
             <div id="file-transcribe-progress" class="transcribe-progress" style="display: none;">
-              <span class="spinner">⏳</span> <span>正在以本地端 AI 轉錄並翻譯為繁體中文...</span>
+              <span class="spinner">⏳</span> <span>正在以本地端 AI 轉錄與 NVIDIA 話者分離處理中...</span>
             </div>
           </div>
         </div>
@@ -221,7 +228,10 @@
         <div class="card">
           <div class="card-header">
             <span id="tag-step-speaker" class="card-tag">發言人對應</span>
-            <h2>👥 發言人姓名自訂</h2>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h2>👥 發言人姓名自訂</h2>
+              <span id="diarize-status-badge" class="badge badge-success" style="display: none; font-size: 11px;">🎯 NVIDIA 話者已自動識別</span>
+            </div>
           </div>
           <div class="card-body">
             <p class="help-text">系統支援無限多位與會者（無人數上限），輸入後自動替換全文逐字稿與會議紀錄：</p>
@@ -249,49 +259,58 @@
       <section class="panel right-panel">
         
         <!-- Step 3: Real-Time Traditional Chinese Transcript -->
-        <div class="card transcript-card">
+        <div class="card transcript-card" style="flex: 1; display: flex; flex-direction: column;">
           <div class="card-header">
             <span id="tag-step-3" class="card-tag">步驟 3</span>
             <div class="header-with-badge">
-              <h2 id="title-step-3">📝 現場中文逐字稿 (英文/中文皆自動轉為繁中)</h2>
+              <h2 id="title-step-3">📝 會議逐字稿與一鍵複製區</h2>
               <span class="badge badge-chinese">100% 繁體中文</span>
             </div>
           </div>
-          <div class="card-body">
+          <div class="card-body" style="flex: 1; display: flex; flex-direction: column;">
             <div class="transcript-toolbar">
               <span class="transcript-stats" id="transcript-stats">字數：0 | 行數：0</span>
-              <div class="toolbar-btns">
+              <div class="toolbar-btns" style="display: flex; gap: 12px; align-items: center;">
+                <button id="reload-latest-transcript-btn" class="btn-text" style="color: #2563eb; font-weight: 700;">🔄 載入最新逐字稿</button>
                 <button id="clear-transcript-btn" class="btn-text">清空內容</button>
               </div>
             </div>
 
-            <!-- Real-Time Instant Live Translation Subtitle Bar -->
-            <div class="live-subtitle-bar" id="live-subtitle-bar">
+            <!-- Real-Time Instant Live Translation Subtitle Bar (Shown only in English mode) -->
+            <div class="live-subtitle-bar" id="live-subtitle-bar" style="display: none;">
               <div class="live-pulse-dot"></div>
               <div class="live-text-wrap">
-                <span class="live-stream-tag">⚡ 實時同傳：</span>
-                <span id="live-stream-text" class="live-stream-text">（等待語音輸入，說話時繁體中文將隨聲即時逐字跳出...）</span>
+                <span class="live-stream-tag">⚡ 英文即時翻中字幕：</span>
+                <span id="live-stream-text" class="live-stream-text">（等待英文語音輸入，說話時繁體中文字幕將即時跳出...）</span>
               </div>
             </div>
 
-            <textarea id="raw-transcript" class="form-control transcript-textarea" placeholder="現場錄音或上傳音檔後，無論說英文或中文，皆會自動翻譯為流暢繁體中文逐字稿出現在此處..."></textarea>
+            <textarea id="raw-transcript" class="form-control transcript-textarea" style="min-height: 520px; flex: 1;" placeholder="現場錄音或拖曳音檔後，繁體中文逐字稿將自動顯示於此處..."></textarea>
             
-            <div class="generate-action-bar" style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px;">
-              <button id="copy-transcript-clean-btn" class="btn btn-primary btn-xl" style="flex: 2; min-width: 280px; background: #2563eb; font-weight: 700;">
-                <span class="btn-icon">📋</span> <span>一鍵複製繁中逐字稿 (貼至 AGY / Gemini 產出會議紀錄)</span>
+            <!-- High-Visibility Copy Success Banner -->
+            <div id="copy-status-banner" style="display: none; margin-top: 12px; padding: 12px 16px; border-radius: 8px; background: #dcfce7; border: 2px solid #16a34a; color: #14532d; font-weight: 700; font-size: 14.5px; align-items: center; justify-content: space-between; box-shadow: 0 4px 12px rgba(22, 163, 74, 0.15);">
+              <span id="copy-status-text">✅ 複製成功！請直接前往線上 AI 按 Ctrl + V 貼上。</span>
+            </div>
+
+            <div class="generate-action-bar" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;">
+              <button id="copy-transcript-clean-btn" class="btn btn-primary btn-xl" style="flex: 1.4; min-width: 240px; background: #2563eb; font-weight: 700;">
+                <span class="btn-icon">📋</span> <span id="copy-clean-btn-text">複製：貼給 Gemini (產出正式會議紀錄)</span>
               </button>
-              <button id="copy-notebooklm-top-btn" class="btn btn-outline btn-xl" style="flex: 1; min-width: 220px; border-color: #0284c7; color: #0369a1; font-weight: 700; background: #f0f9ff;">
-                <span class="btn-icon">📓</span> <span>複製 NotebookLM 格式</span>
+              <button id="copy-outlook-prompt-btn" class="btn btn-primary btn-xl" style="flex: 1.3; min-width: 220px; background: #0f766e; font-weight: 700;">
+                <span class="btn-icon">📧</span> <span id="copy-outlook-prompt-btn-text">複製：貼給 Gemini (產出 Outlook 極簡版)</span>
               </button>
-              <button id="generate-summary-btn" class="btn btn-outline btn-sm" style="flex-basis: 100%; border-color: #cbd5e1; color: #64748b; font-size: 12.5px; padding: 6px 12px; margin-top: 4px;">
-                ⚙️ 本地/API 備用自動提煉（選用）
+              <button id="copy-notebooklm-top-btn" class="btn btn-outline btn-xl" style="flex: 1; min-width: 190px; border-color: #0284c7; color: #0369a1; font-weight: 700; background: #f0f9ff;">
+                <span class="btn-icon">📓</span> <span id="copy-nlm-btn-text">複製：NotebookLM 格式</span>
+              </button>
+              <button id="generate-summary-btn" class="btn btn-outline btn-sm" style="display: none;">
+                ⚙️ 本地備用提煉
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Step 4: AI Generated Executive Meeting Minutes Output -->
-        <div class="card output-card" id="output-section">
+        <!-- Step 4: Hidden Legacy Local AI Output Section (Kept in DOM for compatibility, hidden from UI) -->
+        <div class="card output-card" id="output-section" style="display: none;">
           <div class="card-header">
             <span id="tag-step-4" class="card-tag">步驟 4</span>
             <div class="header-with-tabs">
@@ -303,35 +322,20 @@
             </div>
           </div>
           <div class="card-body">
-            <!-- Rendered Markdown View -->
             <div id="tab-rendered" class="tab-content active">
               <div id="output-rendered" class="markdown-preview">
-                <p class="placeholder-text" id="placeholder-output">點擊上方「一鍵產出深度重點會議紀錄」，Qwen 2.5 本機 AI 將在 3 秒內提煉執行核心結論、待辦行動矩陣與關鍵指標...</p>
+                <p class="placeholder-text" id="placeholder-output"></p>
               </div>
             </div>
-
-            <!-- Raw Markdown View -->
             <div id="tab-markdown" class="tab-content">
               <textarea id="output-markdown" class="form-control markdown-textarea" readonly spellcheck="false"></textarea>
             </div>
-
-            <!-- Export Toolbar -->
             <div class="export-toolbar">
-              <button id="copy-outlook-btn" class="btn btn-primary">
-                📧 複製為 Outlook 格式 (富文本表格排版)
-              </button>
-              <button id="copy-notebooklm-btn" class="btn btn-outline" style="border-color: #0284c7; color: #0369a1; font-weight: 700;">
-                📓 複製為 NotebookLM 來源格式
-              </button>
-              <button id="copy-result-btn" class="btn btn-secondary">
-                📋 複製 Markdown 原始碼
-              </button>
-              <button id="download-md-btn" class="btn btn-success">
-                💾 下載 Markdown 檔 (另存新檔)
-              </button>
-              <button id="print-btn" class="btn btn-outline">
-                🖨️ 列印 / 轉存 PDF
-              </button>
+              <button id="copy-outlook-btn" class="btn btn-primary">📧 複製為 Outlook 格式</button>
+              <button id="copy-notebooklm-btn" class="btn btn-outline">📓 複製為 NotebookLM 來源格式</button>
+              <button id="copy-result-btn" class="btn btn-secondary">📋 複製 Markdown 原始碼</button>
+              <button id="download-md-btn" class="btn btn-success">💾 下載 Markdown 檔</button>
+              <button id="print-btn" class="btn btn-outline">🖨️ 列印 / 轉存 PDF</button>
             </div>
           </div>
         </div>
@@ -339,29 +343,24 @@
       </section>
     </main>
 
-    <!-- Section 2: Knowledge Base & AI Chat Layout -->
+    <!-- Section 2: Knowledge Base (Hidden) -->
     <main class="main-layout kb-layout" id="kb-section" style="display: none;">
-      <!-- KB Left Column: Meeting Files List -->
       <aside class="panel kb-left-panel">
         <div class="card kb-list-card">
           <div class="card-header">
             <h2>📁 歷史會議紀錄</h2>
             <div class="kb-list-header-actions">
               <input type="file" id="kb-import-file-input" accept=".md,.txt" style="display: none;">
-              <button id="kb-import-btn" class="btn btn-sm btn-primary" title="從外部資料夾匯入 .md 或 .txt 會議紀錄">➕ 匯入檔案</button>
-              <button id="refresh-kb-btn" class="btn btn-sm btn-outline" title="重新整理清單">🔄</button>
+              <button id="kb-import-btn" class="btn btn-sm btn-primary">➕ 匯入檔案</button>
+              <button id="refresh-kb-btn" class="btn btn-sm btn-outline">🔄</button>
             </div>
           </div>
           <div class="card-body">
-            <input type="text" id="kb-search-input" class="form-control" placeholder="🔍 搜尋會議紀錄標題或日期...">
-            <div id="kb-meeting-list" class="kb-meeting-list">
-              <div class="loading-spinner">載入會議檔案中...</div>
-            </div>
+            <input type="text" id="kb-search-input" class="form-control" placeholder="🔍 搜尋...">
+            <div id="kb-meeting-list" class="kb-meeting-list"></div>
           </div>
         </div>
       </aside>
-
-      <!-- KB Right Column: Document Viewer & AI Chat -->
       <section class="panel kb-right-panel">
         <div class="card kb-viewer-card">
           <div class="card-header kb-viewer-header">
@@ -371,30 +370,16 @@
             </div>
             <div class="kb-actions">
               <button id="kb-copy-outlook-btn" class="btn btn-primary btn-sm">📧 複製為 Outlook 格式</button>
-              <button id="kb-copy-notebooklm-btn" class="btn btn-outline btn-sm" style="border-color: #0284c7; color: #0369a1; font-weight: 700;">📓 NotebookLM 來源</button>
+              <button id="kb-copy-notebooklm-btn" class="btn btn-outline btn-sm">📓 NotebookLM 來源</button>
               <button id="kb-download-btn" class="btn btn-outline btn-sm">💾 另存新檔</button>
-              <button id="kb-delete-btn" class="btn btn-danger btn-sm" title="刪除此筆會議紀錄">🗑️ 刪除</button>
+              <button id="kb-delete-btn" class="btn btn-danger btn-sm">🗑️ 刪除</button>
             </div>
           </div>
-          
           <div class="card-body kb-viewer-body">
-            <!-- Rendered Markdown View -->
-            <div id="kb-doc-content" class="markdown-preview kb-preview-content">
-              <p class="placeholder-text">👈 請由左側會議清單點選任一份會議紀錄，系統將自動以頂級高階主管格式為您完整呈現！</p>
-            </div>
-
-            <!-- Integrated AI Q&A Panel -->
+            <div id="kb-doc-content" class="markdown-preview kb-preview-content"></div>
             <div class="kb-ai-chat-box">
-              <div class="kb-ai-header">
-                <span class="kb-ai-badge">🤖 詢問本機 Qwen 2.5 7B AI 大腦 (針對本篇會議)</span>
-                <div class="quick-chips">
-                  <button class="chip-btn" data-q="請列出本場會議所有待辦事項、負責人與預計完成時程">📋 待辦事項清單</button>
-                  <button class="chip-btn" data-q="請列出本場會議提及的所有財務金額、補助比率與關鍵數字">💰 金額與關鍵數據</button>
-                  <button class="chip-btn" data-q="請用三點精準總結本場會議最重要的執行長決策">🎯 核心決策精華</button>
-                </div>
-              </div>
               <div class="kb-ai-input-wrap">
-                <input type="text" id="kb-ai-input" class="form-control" placeholder="對本篇會議有任何疑問？請直接在此提問 (例如：本專案的關鍵交付時程與負責人是誰？)...">
+                <input type="text" id="kb-ai-input" class="form-control">
                 <button id="kb-ai-send-btn" class="btn btn-primary">🚀 送出提問</button>
               </div>
               <div id="kb-ai-response" class="kb-ai-response" style="display: none;"></div>
@@ -402,15 +387,17 @@
           </div>
         </div>
       </section>
+    </main>
+
     <!-- Persistent Live Diagnostic & Activity Log Bar -->
     <footer class="app-status-bar">
       <div class="status-indicators">
-        <span class="status-pill status-ok"><span class="dot"></span> Web 伺服器：127.0.0.1:8088</span>
-        <span class="status-pill status-ok"><span class="dot"></span> Qwen 2.5 AI 大腦：127.0.0.1:8080</span>
-        <span class="status-pill status-ok"><span class="dot"></span> Whisper 離線語音：就緒</span>
+        <span class="status-pill status-ok"><span class="dot"></span> 本地轉錄服務：127.0.0.1:8088</span>
+        <span class="status-pill status-ok"><span class="dot"></span> 阿里 SenseVoice 50x 極速語音：就緒</span>
+        <span class="status-pill status-ok"><span class="dot"></span> NVIDIA Nemotron 3 話者分離：就緒</span>
       </div>
       <div class="status-log-preview" id="status-log-preview">
-        <span class="log-tag">日誌</span> <span id="latest-log-text">系統就緒，所有本地服務已連線。</span>
+        <span class="log-tag">狀態</span> <span id="latest-log-text">系統就緒，本地語音轉錄服務已連線。</span>
         <button id="toggle-log-drawer-btn" class="btn-text btn-sm" title="展開完整系統紀錄">📜 展開日誌</button>
       </div>
     </footer>
@@ -427,37 +414,10 @@
       <div id="system-log-console" class="system-log-console"></div>
     </div>
 
-    <!-- AI Engine & Gemini API Settings Modal -->
-    <div id="ai-settings-modal" class="modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); z-index: 9999; display: none; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
-      <div class="modal-card" style="background: #ffffff; border-radius: 12px; max-width: 520px; width: 90%; padding: 24px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); border: 1px solid #cbd5e1; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px;">
-          <h3 style="margin: 0; font-size: 18px; color: #0f172a; display: flex; align-items: center; gap: 8px;">
-            <span>⚙️</span> AI 會議分析引擎設定
-          </h3>
-          <button id="close-ai-settings-btn" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #64748b;">✕</button>
-        </div>
-        
-        <div style="font-size: 13.5px; color: #334155; line-height: 1.6; margin-bottom: 16px;">
-          <label style="display: block; font-weight: 700; margin-bottom: 6px; color: #1e293b;">
-            🌐 Google Gemini API Key（秒級極速・公文級高智商）：
-          </label>
-          <input type="password" id="gemini-key-input" class="form-control" placeholder="貼上 AI Studio API Key (AIzaSy...)" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-family: monospace;" />
-          <p style="margin: 6px 0 0; font-size: 12px; color: #64748b;">
-            💡 前往 <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #2563eb; text-decoration: underline;">Google AI Studio</a> 免費取得 API Key。填入後一鍵直出完整會議紀錄，不填則維持本地 Qwen 離線運算。
-          </p>
-        </div>
-
-        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
-          <button id="clear-gemini-key-btn" class="btn btn-outline" style="padding: 8px 14px; font-size: 13px;">清除並走純離線</button>
-          <button id="save-gemini-key-btn" class="btn btn-primary" style="padding: 8px 18px; font-size: 13px; font-weight: 700;">💾 儲存設定</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Global Toast Notification -->
     <div id="toast" class="toast"></div>
   </div>
 
-  <script src="app.js?v=20260914_4"></script>
+  <script src="app.js?v=20261027_clean3"></script>
 </body>
 </html>
