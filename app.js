@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const audioSourceRadios = document.querySelectorAll('input[name="audio-source"]');
   const startRecordBtn = document.getElementById('start-record-btn');
   const stopRecordBtn = document.getElementById('stop-record-btn');
+  const testMicBtn = document.getElementById('test-mic-btn');
+  const micPermissionHint = document.getElementById('mic-permission-hint');
   const recordTimer = document.getElementById('record-timer');
   const recordStatusBadge = document.getElementById('record-status-badge');
   const waveContainer = document.getElementById('wave-container');
@@ -124,6 +126,33 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const llmStatusPill = document.getElementById('llm-status-pill');
+
+  async function refreshLlmStatus() {
+    if (!llmStatusPill) return;
+    try {
+      const res = await fetch('/api/llm-status');
+      const data = await res.json();
+      if (data.ready) {
+        llmStatusPill.className = 'status-pill status-ok';
+        llmStatusPill.innerHTML = '<span class="dot"></span> DeepSeek Free：已連線（可產出紀錄）';
+      } else if (data.serviceUp && !data.authenticated) {
+        llmStatusPill.className = 'status-pill status-warn';
+        llmStatusPill.innerHTML = '<span class="dot"></span> DeepSeek：請先 opencode 登入';
+        addSystemLog(data.hint || 'OpenCode 尚未登入，無法呼叫 DeepSeek。', 'warn');
+      } else {
+        llmStatusPill.className = 'status-pill status-error';
+        llmStatusPill.innerHTML = '<span class="dot"></span> DeepSeek：OpenCode 4096 未啟動';
+        addSystemLog(data.hint || '請執行會議助理捷徑啟動 OpenCode。', 'error');
+      }
+    } catch (_) {
+      llmStatusPill.className = 'status-pill status-error';
+      llmStatusPill.innerHTML = '<span class="dot"></span> DeepSeek：狀態檢查失敗';
+    }
+  }
+
+  refreshLlmStatus();
+
   function showToast(msg, duration = 3500) {
     const isError = msg.includes('❌') || msg.includes('⚠️') || msg.includes('錯誤') || msg.includes('失敗');
     const effectiveDuration = isError ? 6500 : duration;
@@ -153,12 +182,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Copy Filename ---
-  copyFilenameBtn.addEventListener('click', () => {
-    const filename = `${autoFilenameInput.value}.md`;
-    navigator.clipboard.writeText(filename).then(() => {
-      showToast(`已複製標準檔名：${filename}`);
+  if (copyFilenameBtn && autoFilenameInput) {
+    copyFilenameBtn.addEventListener('click', () => {
+      const filename = `${autoFilenameInput.value}.md`;
+      navigator.clipboard.writeText(filename).then(() => {
+        showToast(`已複製標準檔名：${filename}`);
+      });
     });
-  });
+  }
 
   // --- Speaker Mapping Management (Unlimited Speakers with Live Real-time Typing Replacement) ---
   let currentSpeakerIndex = 1;
@@ -216,7 +247,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  addSpeakerBtn.addEventListener('click', () => addSpeakerRow());
+  if (addSpeakerBtn) {
+    addSpeakerBtn.addEventListener('click', () => addSpeakerRow());
+  }
 
   const autoDetectSpeakersBtn = document.getElementById('auto-detect-speakers-btn');
   const applySpeakersBtn = document.getElementById('apply-speakers-btn');
@@ -298,18 +331,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const text = rawTranscript.value;
     const charCount = text.length;
     const lineCount = text ? text.split('\n').filter(l => l.trim().length > 0).length : 0;
-    transcriptStats.textContent = `字數：${charCount} | 行數：${lineCount}`;
+    if (transcriptStats) {
+      transcriptStats.textContent = `字數：${charCount} | 行數：${lineCount}`;
+    }
+    updateTranscriptPanelVisibility();
   }
 
   rawTranscript.addEventListener('input', updateTranscriptStats);
 
-  clearTranscriptBtn.addEventListener('click', () => {
-    if (confirm('確定要清空逐字稿內容嗎？')) {
-      rawTranscript.value = '';
-      updateTranscriptStats();
-      showToast('逐字稿已清空');
-    }
-  });
+  if (clearTranscriptBtn && rawTranscript) {
+    clearTranscriptBtn.addEventListener('click', () => {
+      if (confirm('確定要清空逐字稿內容嗎？')) {
+        rawTranscript.value = '';
+        updateTranscriptStats();
+        showToast('逐字稿已清空');
+      }
+    });
+  }
 
   // --- Real-Time Instant Live Translation & Speech Engine ---
   const liveStreamText = document.getElementById('live-stream-text');
@@ -320,7 +358,141 @@ document.addEventListener('DOMContentLoaded', () => {
   let recordedBlob = null;
   let speechRecognizer = null;
   let isRecording = false;
+  let recordSessionActive = false;
+  let cancelRecordStart = false;
+  let abandonRecordingSession = false;
   let liveTransTimer = null;
+  let activeRecordStream = null;
+  let micLevelAnim = null;
+  let micAudioContext = null;
+  const RECORD_LOCK_KEY = 'meeting-assistant-record-lock';
+  const RECORD_TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  let recordLockHeartbeat = null;
+
+  function readRecordLock() {
+    try {
+      const raw = localStorage.getItem(RECORD_LOCK_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isOtherTabRecording() {
+    const lock = readRecordLock();
+    if (!lock || lock.tabId === RECORD_TAB_ID) return false;
+    if (Date.now() - (lock.ts || 0) > 90000) return false;
+    return true;
+  }
+
+  function touchRecordLock() {
+    try {
+      localStorage.setItem(RECORD_LOCK_KEY, JSON.stringify({ tabId: RECORD_TAB_ID, ts: Date.now() }));
+    } catch (_) {}
+  }
+
+  function releaseRecordLock() {
+    if (recordLockHeartbeat) {
+      clearInterval(recordLockHeartbeat);
+      recordLockHeartbeat = null;
+    }
+    const lock = readRecordLock();
+    if (lock && lock.tabId === RECORD_TAB_ID) {
+      try { localStorage.removeItem(RECORD_LOCK_KEY); } catch (_) {}
+    }
+  }
+
+  function startRecordLockHeartbeat() {
+    touchRecordLock();
+    if (recordLockHeartbeat) clearInterval(recordLockHeartbeat);
+    recordLockHeartbeat = setInterval(touchRecordLock, 8000);
+  }
+
+  window.addEventListener('storage', (e) => {
+    if (e.key !== RECORD_LOCK_KEY || !e.newValue) return;
+    try {
+      const lock = JSON.parse(e.newValue);
+      if (lock.tabId !== RECORD_TAB_ID && isRecording) {
+        showToast('⚠️ 偵測到另一個視窗也開始錄音，建議只保留一個 Edge 視窗以免重複佔用麥克風。', 6000);
+      }
+    } catch (_) {}
+  });
+
+  function isEnglishSttMode() {
+    const v = engineSelect ? engineSelect.value : '';
+    return v === 'whisper' || v === 'whisper-base-tr' || v === 'english_live';
+  }
+
+  function getSttEngine() {
+    const v = engineSelect ? engineSelect.value : 'sensevoice';
+    if (v === 'sensevoice_fast') return 'sensevoice_fast';
+    if (v === 'english_live') return 'english_live';
+    if (v === 'whisper' || v === 'whisper-base-tr') return 'whisper';
+    return 'sensevoice';
+  }
+
+  function isWhisperSttMode() {
+    return isEnglishSttMode();
+  }
+
+  const liveTranscriptPanel = document.getElementById('live-transcript-panel');
+  const transcriptHeaderDesc = document.getElementById('transcript-header-desc');
+  const transcriptZhHint = document.getElementById('transcript-zh-hint');
+  const titleStep3 = document.getElementById('title-step-3');
+  const transcriptHeaderBadge = document.getElementById('transcript-header-badge');
+
+  const TITLE_STEP3_WHISPER = '📝 現場中文逐字稿 (英文/中文皆自動轉為繁中)';
+  const TITLE_STEP3_ZH = '📝 步驟 3 · 中文會議逐字稿';
+
+  function isTranscriptPlaceholderOnly(text) {
+    const t = (text || '').trim();
+    if (!t) return true;
+    if (t.startsWith('[系統提示]')) return true;
+    if (t.startsWith('[轉錄提示]')) return false;
+    return false;
+  }
+
+  function updateTranscriptPanelVisibility() {
+    const whisper = isWhisperSttMode();
+    const transcriptText = rawTranscript ? rawTranscript.value : '';
+    const hasResult = !isTranscriptPlaceholderOnly(transcriptText);
+    const showLivePanel = whisper || hasResult;
+
+    if (liveTranscriptPanel) {
+      liveTranscriptPanel.hidden = !showLivePanel;
+    }
+    if (transcriptHeaderDesc) {
+      transcriptHeaderDesc.hidden = !whisper && !hasResult;
+    }
+    if (transcriptZhHint) {
+      transcriptZhHint.hidden = whisper || showLivePanel;
+    }
+    if (titleStep3) {
+      titleStep3.textContent = whisper ? TITLE_STEP3_WHISPER : TITLE_STEP3_ZH;
+    }
+    if (transcriptHeaderBadge) {
+      transcriptHeaderBadge.hidden = !whisper;
+    }
+  }
+
+  function formatTranscriptFromEngine(transcript) {
+    let curSpeaker = 1;
+    return transcript
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l, i) => {
+        const clean = l.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
+        if (!clean) return '';
+        const spk = `[Speaker ${curSpeaker}]`;
+        if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
+          curSpeaker = curSpeaker === 1 ? 2 : 1;
+        }
+        return `[發言 ${i + 1}] ${spk}: ${clean}`;
+      })
+      .filter((l) => l.length > 0)
+      .join('\n');
+  }
 
   // Ultra-fast client-side lexical map for instantaneous 0ms feedback while speaking
   const liveLexicon = {
@@ -369,6 +541,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const spkTag = `Speaker ${currentSpeakerIndex}`;
 
             if (isEnglishMode) {
+              const enLine = `[${nowTime}] [EN/${spkTag}]: ${finalRaw}`;
+              rawTranscript.value += (rawTranscript.value ? '\n' : '') + enLine;
+              rawTranscript.scrollTop = rawTranscript.scrollHeight;
+              updateTranscriptStats();
+
               const tempTrans = quickLiveTranslate(finalRaw);
               liveStreamText.textContent = `⚡ 正在翻譯：${tempTrans || finalRaw}`;
 
@@ -378,24 +555,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ text: finalRaw })
               }).then(res => res.json()).then(data => {
                 const chineseLine = (data.success && data.translated) ? data.translated : tempTrans;
-                const formattedLine = `[${nowTime}] [${spkTag}]: ${chineseLine}`;
-                rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
-                rawTranscript.scrollTop = rawTranscript.scrollHeight;
-                updateTranscriptStats();
-                liveStreamText.textContent = `✅ [${spkTag}]: ${chineseLine}`;
+                liveStreamText.textContent = `⚡ 繁中參考：${chineseLine}`;
               }).catch(() => {
-                const formattedLine = `[${nowTime}] [${spkTag}]: ${tempTrans || finalRaw}`;
-                rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
-                rawTranscript.scrollTop = rawTranscript.scrollHeight;
-                updateTranscriptStats();
+                liveStreamText.textContent = `⚡ 繁中參考：${tempTrans || finalRaw}`;
               });
-            } else {
-              // Chinese Mode - Immediately print formatted subtitles into rawTranscript!
-              const formattedLine = `[${nowTime}] [${spkTag}]: ${finalRaw}`;
-              rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
-              rawTranscript.scrollTop = rawTranscript.scrollHeight;
-              updateTranscriptStats();
-              liveStreamText.textContent = `🎙️ [${spkTag}]: ${finalRaw}`;
             }
 
             if (finalRaw.endsWith('.') || finalRaw.endsWith('。') || finalRaw.length > 25) {
@@ -414,8 +577,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isEnglishMode) {
           const instantZh = quickLiveTranslate(liveRaw);
           liveStreamText.textContent = `🎙️ 正在說話 (英)：${liveRaw}  ➔  [${instantZh || '即時轉譯中...'}]`;
-        } else {
-          liveStreamText.textContent = `🎙️ 正在說話：${liveRaw}`;
+
+          clearTimeout(liveTransTimer);
+          liveTransTimer = setTimeout(() => {
+            fetch('/api/translate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: liveRaw })
+            }).then(r => r.json()).then(d => {
+              if (d.success && d.translated && isRecording) {
+                liveStreamText.textContent = `🎙️ ${liveRaw}  ➔  ⚡ ${d.translated}`;
+              }
+            }).catch(() => {});
+          }, 250);
+        } else if (isRecording) {
+          liveStreamText.textContent = '🔴 錄音中（中文模式不顯示即時逐字稿，停止後由 SenseVoice 產生）';
         }
       }
     };
@@ -428,10 +604,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     speechRecognizer.onend = () => {
       isRecognizerRunning = false;
-      if (isRecording) {
+      if (isRecording && isWhisperSttMode()) {
         setTimeout(() => {
-          if (isRecording && !isRecognizerRunning) {
-            try { speechRecognizer.start(); } catch (_) {}
+          if (isRecording && isWhisperSttMode() && !isRecognizerRunning) {
+            try {
+              speechRecognizer.lang = 'en-US';
+              speechRecognizer.start();
+            } catch (_) {}
           }
         }, 50);
       }
@@ -440,19 +619,23 @@ document.addEventListener('DOMContentLoaded', () => {
     speechRecognizer.onerror = (e) => {
       isRecognizerRunning = false;
       console.warn('Speech recognition status:', e.error);
-      if (isRecording) {
+      if (isRecording && isWhisperSttMode()) {
         setTimeout(() => {
-          if (isRecording && !isRecognizerRunning) {
-            try { speechRecognizer.start(); } catch (_) {}
+          if (isRecording && isWhisperSttMode() && !isRecognizerRunning) {
+            try {
+              speechRecognizer.lang = 'en-US';
+              speechRecognizer.start();
+            } catch (_) {}
           }
         }, 100);
       }
     };
 
-    // Watchdog timer: Guarantees speech recognition NEVER interrupts (English & Chinese)
+    // Watchdog: only for English live transcript (Whisper mode)
     setInterval(() => {
-      if (isRecording && !isRecognizerRunning) {
+      if (isRecording && isWhisperSttMode() && !isRecognizerRunning) {
         try {
+          speechRecognizer.lang = 'en-US';
           speechRecognizer.start();
         } catch (_) {}
       }
@@ -461,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Language switcher event listener
     if (engineSelect) {
       engineSelect.addEventListener('change', () => {
-        const isEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
+        const isEng = isEnglishSttMode();
         speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
         if (isRecording) {
           try { speechRecognizer.stop(); } catch (_) {}
@@ -471,9 +654,11 @@ document.addEventListener('DOMContentLoaded', () => {
           liveSubtitleBar.style.display = isEng ? 'flex' : 'none';
         }
         if (waveText) {
-          waveText.textContent = isEng ?
-            '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
+          waveText.textContent = isEng
+            ? '錄音中：上方顯示英文逐字稿，停止後 Whisper 精修'
+            : '錄音中：由 SenseVoice 轉錄（非瀏覽器語音），停止後產生繁中逐字稿';
         }
+        updateTranscriptPanelVisibility();
       });
       // Initial state
       const initialIsEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
@@ -484,12 +669,212 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  updateTranscriptPanelVisibility();
+
   function updateTimer() {
     const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
     const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
     const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
     const s = String(elapsed % 60).padStart(2, '0');
     recordTimer.textContent = `${h}:${m}:${s}`;
+  }
+
+  function pickRecorderMimeType() {
+    if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== 'function') {
+      return '';
+    }
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ];
+    for (const mime of candidates) {
+      if (MediaRecorder.isTypeSupported(mime)) return mime;
+    }
+    return '';
+  }
+
+  function releaseActiveRecordStream() {
+    if (activeRecordStream) {
+      activeRecordStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch (_) {}
+      });
+      activeRecordStream = null;
+    } else if (mediaRecorder?.stream) {
+      mediaRecorder.stream.getTracks().forEach((track) => {
+        try { track.stop(); } catch (_) {}
+      });
+    }
+  }
+
+  function setRecordControlsIdle() {
+    releaseRecordLock();
+    recordSessionActive = false;
+    isRecording = false;
+    cancelRecordStart = false;
+    if (startRecordBtn) startRecordBtn.disabled = false;
+    if (stopRecordBtn) {
+      stopRecordBtn.disabled = true;
+      stopRecordBtn.classList.remove('stop-active');
+    }
+    if (waveContainer) waveContainer.classList.remove('recording');
+    stopMicLevelMonitor();
+  }
+
+  function setRecordControlsActive() {
+    recordSessionActive = true;
+    if (startRecordBtn) startRecordBtn.disabled = true;
+    if (stopRecordBtn) {
+      stopRecordBtn.disabled = false;
+      stopRecordBtn.classList.add('stop-active');
+    }
+  }
+
+  function showRecordError(message) {
+    clearInterval(recordInterval);
+    recordInterval = null;
+    releaseActiveRecordStream();
+    if (speechRecognizer) {
+      try { speechRecognizer.stop(); } catch (_) {}
+    }
+    setRecordControlsIdle();
+    showToast(message);
+    setMicPermissionHint(message.replace(/^⚠️\s*/, ''), 'error');
+    if (recordStatusBadge) {
+      recordStatusBadge.textContent = '錄音失敗';
+      recordStatusBadge.className = 'badge badge-idle';
+    }
+    if (waveText) {
+      waveText.textContent = message.replace(/^⚠️\s*/, '');
+    }
+  }
+
+  function setMicPermissionHint(text, mode = 'warn') {
+    if (!micPermissionHint) return;
+    if (!text) {
+      micPermissionHint.style.display = 'none';
+      micPermissionHint.textContent = '';
+      micPermissionHint.className = 'mic-permission-hint';
+      return;
+    }
+    micPermissionHint.style.display = 'block';
+    micPermissionHint.className = `mic-permission-hint ${mode === 'error' ? 'error' : mode === 'ok' ? 'ok' : ''}`;
+    micPermissionHint.textContent = text;
+  }
+
+  function stopMicLevelMonitor() {
+    if (micLevelAnim) {
+      cancelAnimationFrame(micLevelAnim);
+      micLevelAnim = null;
+    }
+    if (micAudioContext) {
+      try { micAudioContext.close(); } catch (_) {}
+      micAudioContext = null;
+    }
+  }
+
+  function startMicLevelMonitor(stream) {
+    if (!stream || !waveContainer) return;
+    stopMicLevelMonitor();
+    try {
+      micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = micAudioContext.createMediaStreamSource(stream);
+      const analyser = micAudioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const bars = waveContainer.querySelectorAll('.wave-bar');
+
+      const tick = () => {
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        const level = sum / data.length;
+        bars.forEach((bar, idx) => {
+          const h = Math.max(8, Math.min(28, 8 + level / 6 + (idx % 3) * 2));
+          bar.style.height = `${h}px`;
+        });
+        if (isRecording) micLevelAnim = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (e) {
+      console.warn('Mic level monitor notice:', e);
+    }
+  }
+
+  async function acquireAudioStream(selectedSource) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw Object.assign(new Error('NO_MEDIA_DEVICES'), { name: 'NotSupportedError' });
+    }
+    if (selectedSource === 'system') {
+      showToast('請在彈出視窗選擇「分頁」並勾選「共用分頁音訊」！', 6000);
+      setMicPermissionHint('若選了整個螢幕但沒勾「共用音訊」，將無法錄到聲音。', 'warn');
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: true,
+      });
+      displayStream.getVideoTracks().forEach((t) => {
+        try { t.stop(); } catch (_) {}
+      });
+      if (displayStream.getAudioTracks().length === 0) {
+        displayStream.getTracks().forEach((t) => t.stop());
+        throw Object.assign(new Error('NO_AUDIO_TRACK'), { name: 'NotFoundError' });
+      }
+      return displayStream;
+    }
+
+    setMicPermissionHint('請在 Edge 視窗上方點「允許」使用麥克風（若沒看到，請看工作列閃爍的 Edge 圖示）。', 'warn');
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (err) {
+      return await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+  }
+
+  async function refreshMicPermissionStatus() {
+    if (!navigator.permissions?.query) return;
+    try {
+      const status = await navigator.permissions.query({ name: 'microphone' });
+      if (status.state === 'granted') {
+        setMicPermissionHint('麥克風權限已允許，可直接按「開始錄音」。', 'ok');
+      } else if (status.state === 'denied') {
+        setMicPermissionHint('麥克風已被封鎖：Edge 設定 → Cookie 與網站權限 → 麥克風 → 允許 127.0.0.1:18788，或先按「測試麥克風」。', 'error');
+      } else {
+        setMicPermissionHint('首次錄音請允許麥克風；若無提示，請先按「🎤 測試麥克風」。', 'warn');
+      }
+      status.onchange = () => refreshMicPermissionStatus();
+    } catch (_) {
+      setMicPermissionHint('請按「🎤 測試麥克風」確認瀏覽器可存取麥克風。', 'warn');
+    }
+  }
+
+  async function testMicrophoneAccess() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showRecordError('⚠️ 此視窗無法使用麥克風（請用 Edge 開啟 http://127.0.0.1:18788/，不要用 Cursor 內建預覽）。');
+      return;
+    }
+    setMicPermissionHint('正在測試麥克風…請在彈窗選「允許」。', 'warn');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const label = stream.getAudioTracks()[0]?.label || '已連線的麥克風';
+      stream.getTracks().forEach((t) => t.stop());
+      setMicPermissionHint(`麥克風測試成功：${label}。現在可以按「開始錄音」。`, 'ok');
+      showToast('✅ 麥克風可用，請按「開始錄音」！');
+    } catch (err) {
+      const name = err?.name || '';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        showRecordError('⚠️ 麥克風被拒絕：點 Edge 網址列左側 🔒 → 麥克風 → 允許，再按「測試麥克風」。');
+      } else {
+        showRecordError(`⚠️ 麥克風測試失敗：${err.message || name || '未知錯誤'}`);
+      }
+    }
   }
 
   // --- Start Recording (Microphone or YouTube / System Tab Audio) ---
@@ -531,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         }
       }
+      activeRecordStream = stream;
 
       audioChunks = [];
       let mimeType = 'audio/webm';
@@ -549,6 +935,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        isRecording = false;
+        showRecordError('⚠️ 錄音引擎錯誤，請關閉頁面後用桌面捷徑重新開啟。');
       };
 
       mediaRecorder.onstop = async () => {
@@ -592,13 +984,14 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
         }
 
-        // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x + Qwen 2.5 Two-Stage Calibration)
-        const isEngMode = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
-        const currentEngine = isEngMode ? 'english_live' : ((engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice');
-        const engineLabel = isEngMode ? 'SenseVoice 英文辨識 + Qwen 2.5 繁中同傳' : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準');
+        const isEngMode = isEnglishSttMode();
+        const currentEngine = getSttEngine();
+        const engineLabel = isEngMode
+          ? (currentEngine === 'english_live' ? 'SenseVoice 英文 + Qwen 繁中同傳' : 'Whisper 10核心 (中英雙語)')
+          : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 極速原生' : 'SenseVoice + Qwen 雙層校準');
         const existingLive = rawTranscript.value.trim();
-        if (!existingLive) {
-          rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在進行智慧轉錄與實體校準中，請稍候...`;
+        if (!existingLive || isTranscriptPlaceholderOnly(existingLive)) {
+          rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在進行智慧轉錄與校準中，請稍候...`;
         }
         updateTranscriptStats();
         showToast(`🎙️ 錄音結束，本地端 ${engineLabel} 正在進行轉錄校準...`, 5000);
@@ -667,7 +1060,6 @@ document.addEventListener('DOMContentLoaded', () => {
               updateTranscriptStats();
             }
 
-            // Auto-save transcript into meeting folder
             const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
             fetch('/api/auto-save', {
               method: 'POST',
@@ -684,16 +1076,19 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }).catch(err => console.warn('Transcript auto-save error:', err));
 
+            updateTranscriptPanelVisibility();
             showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！逐字稿已自動歸檔。`, 5000);
           } else {
             if (!existingLive || existingLive.includes('[系統提示]')) {
               rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
+              updateTranscriptStats();
             }
             showToast(`⚠️ 轉錄提示: ${data?.error || '未能辨識出清晰人聲'}`, 5000);
           }
         } catch (e) {
           if (!existingLive || existingLive.includes('[系統提示]')) {
             rawTranscript.value = `[轉錄提示] ⚠️ 本機轉錄連線異常，請確認後端服務正常運行。\n異常資訊：${e.message}`;
+            updateTranscriptStats();
           }
           showToast(`❌ 轉錄連線失敗: ${e.message}`, 5000);
         }
@@ -701,37 +1096,57 @@ document.addEventListener('DOMContentLoaded', () => {
 
       mediaRecorder.start(1000);
       isRecording = true;
+      touchRecordLock();
       recordStartTime = Date.now();
       recordInterval = setInterval(updateTimer, 1000);
+      startMicLevelMonitor(stream);
+      setMicPermissionHint('', 'ok');
 
-      // Start Speech Recognizer with configured language
-      if (speechRecognizer) {
-        const isEng = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
-        speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
-        try { speechRecognizer.abort(); } catch (_) {}
-        setTimeout(() => {
-          try {
-            speechRecognizer.start();
-          } catch (e) {
-            console.warn('Speech recognition immediate start notice:', e);
-            setTimeout(() => {
-              try { speechRecognizer.start(); } catch (_) {}
-            }, 250);
-          }
-        }, 50);
+      if (isEnglishSttMode()) {
+        if (speechRecognizer) {
+          speechRecognizer.lang = 'en-US';
+          try { speechRecognizer.abort(); } catch (_) {}
+          setTimeout(() => {
+            try {
+              speechRecognizer.start();
+            } catch (e) {
+              console.warn('Speech recognition immediate start notice:', e);
+              setTimeout(() => {
+                try { speechRecognizer.start(); } catch (_) {}
+              }, 250);
+            }
+          }, 50);
+        }
+        if (liveStreamText) {
+          liveStreamText.textContent = '（英文模式）逐字稿會以英文顯示在下方，上方為繁中參考…';
+        }
+      } else {
+        if (speechRecognizer) {
+          try { speechRecognizer.stop(); } catch (_) {}
+        }
+        rawTranscript.value = '';
+        updateTranscriptStats();
+        if (liveStreamText) {
+          liveStreamText.textContent = '🔴 錄音中 — 中文模式不顯示逐字稿；停止後由本機 SenseVoice 一次產出繁中逐字稿';
+        }
       }
 
-      // UI States
-      startRecordBtn.disabled = true;
-      stopRecordBtn.disabled = false;
-      recordStatusBadge.textContent = '錄音辨識中';
+      setRecordControlsActive();
+      recordStatusBadge.textContent = isWhisperSttMode() ? '錄音＋英文逐字稿' : '錄音中（SenseVoice）';
       recordStatusBadge.className = 'badge badge-recording';
       waveContainer.classList.add('recording');
-      waveText.textContent = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live')) ?
-        '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
+      waveText.textContent = isEnglishSttMode()
+        ? '錄音中：英文逐字稿 + 上方繁中同傳；停止後本機精修轉錄'
+        : '錄音中：SenseVoice 本機轉錄（停錄後產生繁中逐字稿）';
       
-      showToast('🔴 錄音與即時辨識已啟動！');
+      showToast(isWhisperSttMode()
+        ? '🔴 錄音已啟動（英文逐字稿模式）'
+        : '🔴 錄音已啟動（SenseVoice 模式，停錄後產生繁中逐字稿）');
     } catch (err) {
+      if (cancelRecordStart) {
+        setRecordControlsIdle();
+        return;
+      }
       console.error('Audio capture error:', err);
       isRecording = false;
       clearInterval(recordInterval);
@@ -757,12 +1172,37 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopRecording() {
-    if (!isRecording) return;
+    if (!recordSessionActive && !isRecording && !(mediaRecorder && mediaRecorder.state === 'recording')) {
+      setRecordControlsIdle();
+      return;
+    }
+
+    if (recordSessionActive && !isRecording) {
+      cancelRecordStart = true;
+      releaseActiveRecordStream();
+      clearInterval(recordInterval);
+      recordInterval = null;
+      setRecordControlsIdle();
+      if (recordStatusBadge) {
+        recordStatusBadge.textContent = '已取消';
+        recordStatusBadge.className = 'badge badge-idle';
+      }
+      if (waveText) waveText.textContent = '已取消錄音';
+      showToast('已取消錄音');
+      return;
+    }
+
     isRecording = false;
+    recordSessionActive = false;
+    releaseRecordLock();
+    stopMicLevelMonitor();
 
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-      mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      try { mediaRecorder.stop(); } catch (e) {
+        console.warn('mediaRecorder.stop:', e);
+      }
+    } else {
+      releaseActiveRecordStream();
     }
 
     if (speechRecognizer) {
@@ -770,16 +1210,147 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     clearInterval(recordInterval);
-    startRecordBtn.disabled = false;
-    stopRecordBtn.disabled = true;
-    recordStatusBadge.textContent = '已完成';
+    recordInterval = null;
+    if (startRecordBtn) startRecordBtn.disabled = false;
+    if (stopRecordBtn) {
+      stopRecordBtn.disabled = true;
+      stopRecordBtn.classList.remove('stop-active');
+    }
+    recordStatusBadge.textContent = '處理中…';
     recordStatusBadge.className = 'badge badge-idle';
     waveContainer.classList.remove('recording');
-    waveText.textContent = '錄音已結束';
+    waveText.textContent = '錄音已結束，正在處理音訊…';
   }
 
-  startRecordBtn.addEventListener('click', startRecording);
-  stopRecordBtn.addEventListener('click', stopRecording);
+  if (testMicBtn) {
+    testMicBtn.addEventListener('click', () => testMicrophoneAccess());
+  }
+  refreshMicPermissionStatus();
+
+  if (startRecordBtn) {
+    startRecordBtn.addEventListener('click', () => {
+      if (isRecording) return;
+      startRecording().catch((err) => {
+        console.error('startRecording unhandled:', err);
+        showRecordError(`⚠️ 錄音啟動失敗：${err.message || err}`);
+      });
+    });
+  } else {
+    addSystemLog('❌ 找不到「開始錄音」按鈕，請重新載入頁面。', 'error');
+  }
+  if (stopRecordBtn) {
+    stopRecordBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      stopRecording();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && recordSessionActive) {
+        stopRecording();
+      }
+    });
+  }
+
+  function isRecordingBusy() {
+    return recordSessionActive || isRecording
+      || (mediaRecorder && mediaRecorder.state === 'recording');
+  }
+
+  function resetSpeakerListToDefault() {
+    if (!speakerList) return;
+    speakerList.innerHTML = '';
+    addSpeakerRow('Speaker 1', '');
+    addSpeakerRow('Speaker 2', '');
+    currentSpeakerIndex = 1;
+  }
+
+  function resetMeetingWorkspace() {
+    const resetNow = new Date();
+    const rY = resetNow.getFullYear();
+    const rM = String(resetNow.getMonth() + 1).padStart(2, '0');
+    const rD = String(resetNow.getDate()).padStart(2, '0');
+    const rH = String(resetNow.getHours()).padStart(2, '0');
+    const rMin = String(resetNow.getMinutes()).padStart(2, '0');
+
+    if (dateInput) dateInput.value = `${rY}-${rM}-${rD}`;
+    if (timeInput) timeInput.value = `${rH}:${rMin}`;
+    if (locationInput) locationInput.value = '公司大會議室';
+    if (titleInput) titleInput.value = '跨部門專案討論會';
+    if (attendeesInput) attendeesInput.value = '張主管、李工程師、專案團隊';
+    updateFilename();
+
+    if (rawTranscript) {
+      rawTranscript.value = '';
+      updateTranscriptStats();
+    }
+    if (outputRendered) {
+      outputRendered.innerHTML = '<p class="placeholder-text" id="placeholder-output">點擊上方「一鍵產出深度重點會議紀錄」，DeepSeek Free 本機 AI 將在 3 秒內提煉執行核心結論、待辦行動矩陣與關鍵指標...</p>';
+    }
+    if (outputMarkdown) outputMarkdown.value = '';
+
+    recordedBlob = null;
+    audioChunks = [];
+    if (audioPlayer) {
+      try { audioPlayer.pause(); } catch (_) {}
+      audioPlayer.removeAttribute('src');
+    }
+    if (recordedAudioContainer) recordedAudioContainer.style.display = 'none';
+    if (fileTranscribeProgress) fileTranscribeProgress.style.display = 'none';
+    if (recordTimer) recordTimer.textContent = '00:00:00';
+    if (recordStatusBadge) {
+      recordStatusBadge.textContent = '待命';
+      recordStatusBadge.className = 'badge badge-idle';
+    }
+    if (waveContainer) waveContainer.classList.remove('recording');
+    if (waveText) {
+      waveText.textContent = '語音即時監聽中 (英文自動即時轉繁體中文)';
+    }
+    if (liveStreamText) liveStreamText.textContent = '';
+    resetSpeakerListToDefault();
+  }
+
+  function startNewMeeting() {
+    if (isRecordingBusy()) {
+      const ok = confirm(
+        '目前正在錄音或準備錄音。開啟新會議將取消本次錄音且不會自動轉錄，是否繼續？'
+      );
+      if (!ok) return;
+
+      if (recordSessionActive && !isRecording) {
+        cancelRecordStart = true;
+        releaseActiveRecordStream();
+        clearInterval(recordInterval);
+        recordInterval = null;
+        if (speechRecognizer) {
+          try { speechRecognizer.stop(); } catch (_) {}
+        }
+        setRecordControlsIdle();
+        if (recordStatusBadge) {
+          recordStatusBadge.textContent = '待命';
+          recordStatusBadge.className = 'badge badge-idle';
+        }
+        if (waveText) {
+          waveText.textContent = '語音即時監聽中 (英文自動即時轉繁體中文)';
+        }
+      } else {
+        abandonRecordingSession = true;
+        stopRecording();
+      }
+    }
+
+    resetMeetingWorkspace();
+    if (typeof switchToLiveTab === 'function') {
+      switchToLiveTab();
+    }
+    addSystemLog('已開啟新會議，工作區已重置。', 'success');
+    showToast('✨ 已開啟新會議');
+  }
+
+  if (newMeetingBtn) {
+    newMeetingBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      startNewMeeting();
+    });
+  }
 
   // --- Download Audio File (with Windows Save File Picker) ---
   async function triggerAudioDownload() {
@@ -940,7 +1511,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // --- Qwen 2.5 Local AI Meeting Minutes Generation ---
+  // --- DeepSeek Free Cloud Meeting Minutes Generation ---
   async function generateMeetingMinutes() {
     const text = rawTranscript.value.trim();
     if (!text) {
@@ -962,7 +1533,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let processedTranscript = rawTranscript.value.trim();
 
     // Show AI Thinking State
-    showToast('🤖 Qwen 2.5 本機 AI 正在深度提煉會議紀錄 (約3秒)...');
+    showToast('🤖 DeepSeek 免費雲端正在深度提煉會議紀錄...');
     generateSummaryBtn.disabled = true;
     generateSummaryBtn.innerHTML = `<span class="btn-icon">🧠</span> <span>AI 正在深度提煉中...</span>`;
 
@@ -1031,7 +1602,7 @@ ${processedTranscript.slice(0, 32000)}`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           geminiApiKey: savedGeminiKey,
-          model: savedGeminiKey ? 'gemini-1.5-flash' : 'qwen2.5-7b-instruct',
+          model: savedGeminiKey ? 'gemini-1.5-flash' : 'deepseek-v4.1-flash-free',
           messages: [
             {
               role: 'system',
@@ -1054,28 +1625,36 @@ ${processedTranscript.slice(0, 32000)}`;
         if (aiData.choices && aiData.choices[0] && aiData.choices[0].message) {
           aiGeneratedMinutes = aiData.choices[0].message.content.trim();
         }
+      } else {
+        const errBody = await aiResponse.text();
+        console.warn('AI summarize failed:', aiResponse.status, errBody);
+        if (errBody.includes('OpenCode') || errBody.includes('auth')) {
+          showToast('⚠️ 請先在 PowerShell 執行：opencode auth login -p opencode，登入後再產出紀錄。', 9000);
+          refreshLlmStatus();
+        }
       }
     } catch (e) {
       console.warn('AI summarize request notice:', e);
     }
 
     generateSummaryBtn.disabled = false;
-    generateSummaryBtn.innerHTML = `<span class="btn-icon">⚡</span> <span>一鍵產出深度重點會議紀錄 (Qwen 2.5 AI)</span>`;
+    generateSummaryBtn.innerHTML = `<span class="btn-icon">⚡</span> <span>一鍵產出深度重點會議紀錄 (DeepSeek Free)</span>`;
 
     let finalMd = '';
     if (aiGeneratedMinutes && aiGeneratedMinutes.length > 50) {
       finalMd = aiGeneratedMinutes;
-      showToast('✨ Qwen 2.5 AI 高管精華會議紀錄已提煉完成並自動存檔！');
+      showToast('✨ DeepSeek Free 高管精華會議紀錄已提煉完成並自動存檔！');
     } else {
-      showToast('⚠️ 本地 Qwen 2.5 AI 大腦未連線或逾時！請確認執行【AI智慧會議助理.bat】！', 7000);
-      finalMd = `# ⚠️ 【本地 Qwen 2.5 AI 尚未就緒】
+      showToast('⚠️ DeepSeek 無法推論：多半是 OpenCode 尚未登入。請執行 opencode auth login -p opencode', 9000);
+      refreshLlmStatus();
+      finalMd = `# ⚠️ 【DeepSeek 免費雲端尚未就緒】
 
-> **提示**：目前本機端 AI 推論引擎（Port 8080）未啟動或無法連線，因此無法執行 Map-Reduce 深度提煉。
+> **提示**：OpenCode（4096）可能已啟動，但 **尚未登入免費雲端帳號**，因此無法呼叫 DeepSeek。
 > 
 > **如何解決**：
-> 1. 請確認已透過專案目錄中的 **\`AI智慧會議助理.bat\`**（或執行 \`start_all.ps1\`）開啟程式。
-> 2. 確認黑色視窗提示「[1/4] Qwen 2.5 7B AI 大腦已在運行中」與「[2/4] 會議助理雙引擎伺服器已在運行中」。
-> 3. 回到本畫面重新點擊「一鍵產出深度重點會議紀錄」即可獲得高管級精華摘要！
+> 1. 開啟 **PowerShell**，執行：\`opencode auth login -p opencode\`（依瀏覽器完成登入）。
+> 2. 若 4096 未啟動，請執行 **\`AI智慧會議助理.bat\`** 或 \`opencode serve --port 4096 --hostname 127.0.0.1\`。
+> 3. 重新載入本頁，確認底部狀態為「DeepSeek Free：已連線」，再點「一鍵產出」。
 
 ---
 
@@ -1151,7 +1730,7 @@ ${processedTranscript}`;
 
     let md = `# 📋 ${meetingTitle} - 正式重點會議紀錄與行動追蹤表\n\n`;
     md += `> **會議文件編號**：\`${filename}\`  \n`;
-    md += `> **產出時間**：${yyyy}-${mm}-${dd} ${hh}:${min} | **核心引擎**：Qwen 2.5 本機 AI  \n\n`;
+    md += `> **產出時間**：${yyyy}-${mm}-${dd} ${hh}:${min} | **核心引擎**：DeepSeek Free 雲端 AI  \n\n`;
     md += `## 📌 一、會議基本資訊\n\n| 項目欄位 | 詳細內容說明 |\n| :--- | :--- |\n| **會議日期** | ${meetingDate} |\n| **會議時間** | ${meetingTime} |\n| **會議地點** | ${meetingLocation} |\n| **會議主題** | **${meetingTitle}** |\n| **出席人員** | ${attendees} |\n\n`;
     md += `## 🎯 二、核心重點與決議定案事項 (Executive Decisions)\n\n`;
     progressDecisions.forEach((point, idx) => { md += `${idx + 1}. **決議 ${idx + 1}**：${point}\n`; });
@@ -1422,7 +2001,7 @@ ${processedTranscript}`;
   }
 
   // Download Markdown with File Picker
-  downloadMdBtn.addEventListener('click', async () => {
+  if (downloadMdBtn && outputMarkdown) downloadMdBtn.addEventListener('click', async () => {
     const text = outputMarkdown.value;
     if (!text) {
       showToast('請先點擊產出會議紀錄！');
@@ -1492,22 +2071,27 @@ ${processedTranscript}`;
   let currentKbDoc = '';
   let currentKbFileName = '';
 
+  function switchToLiveTab() {
+    if (!navLiveTab || !navKbTab || !liveSection || !kbSection) return;
+    navLiveTab.classList.add('active');
+    navKbTab.classList.remove('active');
+    liveSection.style.display = 'grid';
+    kbSection.style.display = 'none';
+  }
+
+  function switchToKbTab() {
+    if (!navLiveTab || !navKbTab || !liveSection || !kbSection) return;
+    navKbTab.classList.add('active');
+    navLiveTab.classList.remove('active');
+    liveSection.style.display = 'none';
+    kbSection.style.display = 'grid';
+    loadKnowledgeBaseMeetings();
+  }
+
   // Tab Switching
   if (navLiveTab && navKbTab) {
-    navLiveTab.addEventListener('click', () => {
-      navLiveTab.classList.add('active');
-      navKbTab.classList.remove('active');
-      liveSection.style.display = 'grid';
-      kbSection.style.display = 'none';
-    });
-
-    navKbTab.addEventListener('click', () => {
-      navKbTab.classList.add('active');
-      navLiveTab.classList.remove('active');
-      liveSection.style.display = 'none';
-      kbSection.style.display = 'grid';
-      loadKnowledgeBaseMeetings();
-    });
+    navLiveTab.addEventListener('click', () => switchToLiveTab());
+    navKbTab.addEventListener('click', () => switchToKbTab());
   }
 
   async function loadKnowledgeBaseMeetings() {
@@ -1852,7 +2436,7 @@ ${processedTranscript}`;
 
     if (kbAiResponse) {
       kbAiResponse.style.display = 'block';
-      kbAiResponse.innerHTML = '🤖 <strong>Qwen 2.5 7B AI 大腦正在分析本篇會議紀錄...</strong>';
+      kbAiResponse.innerHTML = '🤖 <strong>DeepSeek Free 正在分析本篇會議紀錄...</strong>';
     }
     if (kbAiSendBtn) kbAiSendBtn.disabled = true;
 
@@ -1876,7 +2460,7 @@ ${processedTranscript}`;
         kbAiResponse.innerHTML = `<span style="color:red;">❌ AI 回答失敗：${data.error || '未知錯誤'}</span>`;
       }
     } catch (err) {
-      kbAiResponse.innerHTML = `<span style="color:red;">❌ 連線至本地 AI 失敗，請確認 Qwen 2.5 7B 正在運行。</span>`;
+      kbAiResponse.innerHTML = `<span style="color:red;">❌ 連線至 DeepSeek 免費雲端失敗，請確認已執行桌面捷徑（OpenCode 4096 + 伺服器 18788）。</span>`;
     } finally {
       if (kbAiSendBtn) kbAiSendBtn.disabled = false;
     }
@@ -1901,26 +2485,140 @@ ${processedTranscript}`;
   const memoryBadge = document.getElementById('memory-badge');
   const rlFeedbackBtn = document.getElementById('rl-feedback-btn');
 
+  const ENTITY_CATEGORY_LABELS = {
+    personnel: '人員與職稱',
+    equipment_models: '設備與型號',
+    systems_partners: '系統與合作夥伴',
+    subsidies_metrics: '補助與關鍵指標',
+  };
+
+  function renderEnterpriseMemoryHtml(data) {
+    const mem = data || {};
+    const rules = Array.isArray(mem.learned_rules) ? mem.learned_rules : [];
+    const entities = mem.enterprise_entities && typeof mem.enterprise_entities === 'object'
+      ? mem.enterprise_entities
+      : {};
+    let totalEntities = 0;
+    let body = '';
+
+    const entityKeys = Object.keys(entities);
+    if (entityKeys.length === 0 && rules.length === 0) {
+      body = '<p class="placeholder-text">尚無學習到的企業專有名詞。完成會議紀錄後可點「納入 AI 強化學習」讓系統自動累積。</p>';
+    } else {
+      entityKeys.forEach((key) => {
+        const arr = entities[key];
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        totalEntities += arr.length;
+        const label = ENTITY_CATEGORY_LABELS[key] || key;
+        body += `<div class="memory-entity-block"><h4>${label} (${arr.length})</h4><ul>`;
+        arr.forEach((item) => {
+          body += `<li>${String(item)}</li>`;
+        });
+        body += '</ul></div>';
+      });
+      if (rules.length > 0) {
+        body += `<div class="memory-entity-block"><h4>學習規則 (${rules.length})</h4><ul>`;
+        rules.forEach((rule) => {
+          body += `<li>${String(rule)}</li>`;
+        });
+        body += '</ul></div>';
+      }
+    }
+
+    if (mem.last_updated) {
+      body += `<p class="memory-updated-hint">最後更新：${mem.last_updated}</p>`;
+    }
+    body += '<p class="memory-updated-hint">資料來源：<code>data/company_memory.json</code>（本機檔案，由強化學習自動合併）</p>';
+
+    return { html: body, totalEntities };
+  }
+
   async function fetchEnterpriseMemory() {
     try {
       const res = await fetch('/api/get-memory');
       const data = await res.json();
       cachedEnterpriseMemory = data;
-      
-      let totalEntities = 0;
-      if (data.enterprise_entities) {
-        for (const arr of Object.values(data.enterprise_entities)) {
-          if (Array.isArray(arr)) totalEntities += arr.length;
-        }
-      }
+
+      const { totalEntities } = renderEnterpriseMemoryHtml(data);
 
       if (memoryBadge) {
         memoryBadge.textContent = `🧠 企業記憶庫 (已自主學習 ${totalEntities} 項專有名詞)`;
       }
-    } catch (_) {}
+      return data;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  let enterpriseMemoryModal = null;
+
+  function closeEnterpriseMemoryPanel() {
+    if (enterpriseMemoryModal) {
+      enterpriseMemoryModal.style.display = 'none';
+    }
+  }
+
+  async function openEnterpriseMemoryPanel() {
+    if (!enterpriseMemoryModal) {
+      enterpriseMemoryModal = document.createElement('div');
+      enterpriseMemoryModal.id = 'enterprise-memory-modal';
+      enterpriseMemoryModal.className = 'memory-modal-backdrop';
+      enterpriseMemoryModal.innerHTML = `
+        <div class="memory-modal-card" role="dialog" aria-labelledby="memory-modal-title">
+          <div class="memory-modal-header">
+            <h3 id="memory-modal-title">🧠 企業專有名詞記憶庫</h3>
+            <button type="button" class="btn-text memory-modal-close" aria-label="關閉">✕</button>
+          </div>
+          <div id="memory-modal-body" class="memory-modal-body"></div>
+          <div class="memory-modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" id="memory-modal-goto-kb">📚 前往歷史會議庫</button>
+            <button type="button" class="btn btn-primary btn-sm" id="memory-modal-refresh">🔄 重新載入</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(enterpriseMemoryModal);
+      enterpriseMemoryModal.addEventListener('click', (e) => {
+        if (e.target === enterpriseMemoryModal) closeEnterpriseMemoryPanel();
+      });
+      enterpriseMemoryModal.querySelector('.memory-modal-close')?.addEventListener('click', closeEnterpriseMemoryPanel);
+      enterpriseMemoryModal.querySelector('#memory-modal-goto-kb')?.addEventListener('click', () => {
+        closeEnterpriseMemoryPanel();
+        switchToKbTab();
+      });
+      enterpriseMemoryModal.querySelector('#memory-modal-refresh')?.addEventListener('click', async () => {
+        const bodyEl = document.getElementById('memory-modal-body');
+        if (bodyEl) bodyEl.innerHTML = '<p class="placeholder-text">載入中…</p>';
+        const data = await fetchEnterpriseMemory();
+        if (bodyEl) bodyEl.innerHTML = renderEnterpriseMemoryHtml(data).html;
+      });
+    }
+
+    const bodyEl = document.getElementById('memory-modal-body');
+    if (bodyEl) {
+      bodyEl.innerHTML = '<p class="placeholder-text">載入中…</p>';
+    }
+    enterpriseMemoryModal.style.display = 'flex';
+
+    const data = cachedEnterpriseMemory || await fetchEnterpriseMemory();
+    if (bodyEl) {
+      bodyEl.innerHTML = renderEnterpriseMemoryHtml(data).html;
+    }
   }
 
   fetchEnterpriseMemory();
+
+  if (memoryBadge) {
+    memoryBadge.setAttribute('role', 'button');
+    memoryBadge.setAttribute('tabindex', '0');
+    memoryBadge.title = '點擊查看企業專有名詞記憶庫（data/company_memory.json）';
+    memoryBadge.addEventListener('click', () => openEnterpriseMemoryPanel());
+    memoryBadge.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openEnterpriseMemoryPanel();
+      }
+    });
+  }
 
   if (rlFeedbackBtn) {
     rlFeedbackBtn.addEventListener('click', async () => {

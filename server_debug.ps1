@@ -2,7 +2,7 @@ $logFile = "D:\project\server_debug.log"
 "Starting server at $(Get-Date)" | Out-File $logFile
 
 try {
-    $port = 8088
+    $port = 18788
     $prefix = "http://localhost:$port/"
     $root = "D:\project\MeetingAssistant"
 

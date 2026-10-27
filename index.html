@@ -164,13 +164,15 @@
               </div>
             </div>
 
+            <div id="mic-permission-hint" class="mic-permission-hint" style="display: none;"></div>
             <div class="record-controls-row">
-              <button id="start-record-btn" class="btn btn-danger btn-lg">
+              <button id="start-record-btn" class="btn btn-danger btn-lg" type="button">
                 <span class="record-dot"></span> <span id="start-record-text">開始錄音</span>
               </button>
-              <button id="stop-record-btn" class="btn btn-secondary btn-lg" disabled>
+              <button id="stop-record-btn" class="btn btn-secondary btn-lg stop-record-btn" type="button" disabled aria-label="停止錄音">
                 ⏹️ <span id="stop-record-text">停止錄音</span>
               </button>
+              <button id="test-mic-btn" class="btn btn-outline btn-sm" type="button">🎤 測試麥克風</button>
               <div class="record-timer" id="record-timer">00:00:00</div>
             </div>
 
@@ -283,7 +285,6 @@
                 <span class="live-stream-tag">⚡ 英文即時翻中字幕：</span>
                 <span id="live-stream-text" class="live-stream-text">（等待英文語音輸入，說話時繁體中文字幕將即時跳出...）</span>
               </div>
-            </div>
 
             <textarea id="raw-transcript" class="form-control transcript-textarea" style="min-height: 520px; flex: 1;" placeholder="現場錄音或拖曳音檔後，繁體中文逐字稿將自動顯示於此處..."></textarea>
             
