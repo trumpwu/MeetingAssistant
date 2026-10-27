@@ -1,14 +1,12 @@
 import * as OpenCC from "npm:opencc-js";
 const toTaiwanTraditional = OpenCC.Converter({ from: "cn", to: "tw" });
 
-// Deno server. 8088 is taken on this PC by XQ daq.exe, so the app uses 18788.
-const port = 18788;
+// Deno High-Performance Server for Meeting Assistant (Port 8088)
+const port = 8088;
 const root = "D:\\project\\MeetingAssistant";
 const meetingsDir = "D:\\project\\Meetings";
 const tempDir = "D:\\project\\temp_transcribe";
-const desktopDir = `${Deno.env.get("USERPROFILE") ?? "C:\\Users\\觀達"}\\Desktop`;
-const whisperCli = "D:\\project\\whisper.cpp\\Release\\whisper-cli.exe";
-const whisperModel = "D:\\project\\models\\ggml-base.bin";
+const desktopDir = "C:\\Users\\Innovare\\Desktop";
 const ffmpeg = "D:\\project\\MeetingAssistant\\ffmpeg.exe";
 
 // Alibaba SenseVoice (sherpa-onnx FunASR Nano int8)
@@ -333,43 +331,10 @@ const mimeTypes: Record<string, string> = {
 };
 
 console.log(`Meeting Assistant Server running on http://127.0.0.1:${port}/ ...`);
-console.log(`LLM: ${LLM_ENGINE_LABEL} via ${OPENCODE_BASE}`);
-isCloudLlmReady().then((ok) => {
-  console.log(ok ? `[OK] OpenCode 雲端就緒` : `[WARN] OpenCode serve 未就緒（請啟動 port 4096）`);
-});
 
 Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
   const url = new URL(req.url);
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-
-  if (pathname === "/api/health" && req.method === "GET") {
-    return Response.json({ ok: true, app: "meeting-assistant", port });
-  }
-
-  // 0. API: /api/llm-status
-  if (pathname === "/api/llm-status" && req.method === "GET") {
-    const serviceUp = await isOpenCodeServiceUp();
-    const authenticated = hasOpenCodeCredentials();
-    const ready = serviceUp && authenticated;
-    let hint = "";
-    if (!serviceUp) {
-      hint = "OpenCode 未啟動：請執行 Start_MeetingAssistant.bat 或 opencode serve --port 4096 --hostname 127.0.0.1";
-    } else if (!authenticated) {
-      hint =
-        "尚未設定 OpenCode API 憑證：請執行 OpenCode登入DeepSeek.bat，或 opencode auth login -p opencode 並貼上 https://opencode.ai/auth 建立的 oc_sk API key（console login 不算）";
-    }
-    return Response.json({
-      success: true,
-      ready,
-      serviceUp,
-      authenticated,
-      hint,
-      engine: LLM_ENGINE_LABEL,
-      model: `${CLOUD_MODEL.providerID}/${CLOUD_MODEL.modelID}`,
-      endpoint: OPENCODE_BASE,
-      authPath: getOpenCodeAuthPath(),
-    });
-  }
 
   // 1. API: /api/transcribe-file (Transcribes M4A, MP3, WAV, WebM, AAC, MP4, FLAC)
   if (pathname === "/api/transcribe-file" && req.method === "POST") {
@@ -631,13 +596,22 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
       const { text } = await req.json();
       if (!text) return Response.json({ success: false, translated: "" });
 
-      const translated = await localOrCloudChat(
-        [
-          { role: "system", content: "你是專業即時同聲傳譯員，請將英文句子直接翻譯成流暢的繁體中文，僅輸出繁中結果：" },
-          { role: "user", content: text },
-        ],
-        { temperature: 0.1, max_tokens: 256, timeoutMs: 8000 },
-      ) || text;
+      const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen2.5-7b-instruct",
+          messages: [
+            { role: "system", content: "你是專業即時同聲傳譯員，請將英文句子直接翻譯成流暢的繁體中文，僅輸出繁中結果：" },
+            { role: "user", content: text }
+          ],
+          temperature: 0.1,
+          max_tokens: 256
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      const data = await llamaRes.json();
+      const translated = data?.choices?.[0]?.message?.content?.trim() || text;
       return Response.json({ success: true, translated });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
@@ -758,17 +732,25 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         const extractedSegments: string[] = [];
         for (let idx = 0; idx < chunks.length; idx++) {
           const chunk = chunks[idx];
-          const factText = await localOrCloudChat(
-            [
-              {
-                role: "system",
-                content:
-                  "你是事實提煉特助。請從以下會議片段中客觀提取事實，嚴禁使用口號：1. 討論主題與各方意見 2. 提及的數據/規格/數值 3. 達成的共識與待辦任務。每一點必須標註時間標籤（如 [MM:SS]）。只列真實事實，嚴禁腦補未提及的人名或情境。",
-              },
-              { role: "user", content: `【會議片段 ${idx + 1}/${chunks.length}】：\n${chunk}` },
-            ],
-            { temperature: 0.2, max_tokens: 1000 },
-          );
+          const mapRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "qwen2.5-7b-instruct",
+              messages: [
+                {
+                  role: "system",
+                  content: "你是事實提煉特助。請從以下會議片段中客觀提取事實，嚴禁使用口號：1. 討論主題與各方意見 2. 提及的數據/規格/數值 3. 達成的共識與待辦任務。每一點必須標註時間標籤（如 [MM:SS]）。只列真實事實，嚴禁腦補未提及的人名或情境。"
+                },
+                { role: "user", content: `【會議片段 ${idx + 1}/${chunks.length}】：\n${chunk}` }
+              ],
+              temperature: 0.2,
+              repeat_penalty: 1.15,
+              max_tokens: 1000
+            })
+          });
+          const mapData = await mapRes.json();
+          const factText = mapData?.choices?.[0]?.message?.content?.trim();
           if (factText) extractedSegments.push(factText);
         }
         consolidatedFacts = extractedSegments.join("\n\n---\n\n");
@@ -776,18 +758,31 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         consolidatedFacts = cleanedTranscript;
       }
 
-      const polishedText = await localOrCloudChat(
-        [
-          { role: "system", content: formalSystemPrompt },
-          {
-            role: "user",
-            content: `請根據以下【真實會議事實清單】，嚴格依據標準格式整理出正式會議紀錄：\n\n${consolidatedFacts.slice(0, 16000)}`,
-          },
-        ],
-        { temperature: 0.2, max_tokens: 3500 },
-      );
+      const finalRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen2.5-7b-instruct",
+          messages: [
+            {
+              role: "system",
+              content: formalSystemPrompt
+            },
+            {
+              role: "user",
+              content: `請根據以下【真實會議事實清單】，嚴格依據標準格式整理出正式會議紀錄：\n\n${consolidatedFacts.slice(0, 16000)}`
+            }
+          ],
+          temperature: 0.2,
+          repeat_penalty: 1.18,
+          frequency_penalty: 0.3,
+          presence_penalty: 0.1,
+          max_tokens: 3500
+        })
+      });
 
-      const provider = hasOpenCodeCredentials() ? "opencode-deepseek" : "local-qwen";
+      const finalData = await finalRes.json();
+      const polishedText = finalData?.choices?.[0]?.message?.content?.trim() || "";
 
       return Response.json({
         choices: [
@@ -798,7 +793,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
             }
           }
         ],
-        provider,
+        provider: "local-qwen"
       });
     } catch (err) {
       return Response.json({ error: String(err) }, { status: 500 });
@@ -898,7 +893,7 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
     }
   }
 
-  // 5. API: /api/chat-with-meeting (Q&A via DeepSeek Free cloud)
+  // 5. API: /api/chat-with-meeting (Q&A with current meeting file via Qwen 2.5 7B)
   if (pathname === "/api/chat-with-meeting" && req.method === "POST") {
     try {
       const { docContent, question } = await req.json();
@@ -906,16 +901,28 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         return Response.json({ success: false, error: "Missing docContent or question" });
       }
 
-      const data = await openaiStyleChat([
-        {
-          role: "system",
-          content: "你是高階 AI 會議特助。請根據使用者提供的會議紀錄內容，使用專業、精準、結構化的繁體中文回答使用者的問題。若會議內容未提及，請如實告知。",
-        },
-        {
-          role: "user",
-          content: `【會議紀錄內容】：\n${docContent.slice(0, 20000)}\n\n【使用者問題】：\n${question}`,
-        },
-      ]);
+      const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen2.5-7b-instruct",
+          messages: [
+            {
+              role: "system",
+              content: "你是由 Google DeepMind 團隊設計的高階 AI 會議特助 Antigravity。請根據使用者提供的會議紀錄內容，使用專業、精準、結構化的繁體中文回答使用者的問題。若會議內容未提及，請如實告知。"
+            },
+            {
+              role: "user",
+              content: `【會議紀錄內容】：\n${docContent.slice(0, 20000)}\n\n【使用者問題】：\n${question}`
+            }
+          ],
+          temperature: 0.3,
+          presence_penalty: 0.5,
+          frequency_penalty: 0.5,
+          max_tokens: 2048
+        })
+      });
+      const data = await llamaRes.json();
       const answer = data?.choices?.[0]?.message?.content?.trim() || "抱歉，無法取得回答。";
       return Response.json({ success: true, answer });
     } catch (err) {
@@ -1033,15 +1040,25 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         file.close();
       } catch (_) {}
 
-      // Asynchronously extract and merge new entities into company_memory.json via DeepSeek Free
+      // Asynchronously extract and merge new entities into company_memory.json via Qwen 2.5 7B
       if (editedContent && editedContent.length > 50) {
         (async () => {
           try {
             const extractPrompt = `請從以下會議紀錄中，提煉出該企業的核心人名、專用設備型號、系統名稱與重要數據指標，以 JSON 格式輸出：{"personnel":[], "equipment_models":[], "systems_partners":[], "subsidies_metrics":[]}\n\n會議內容：\n${editedContent.slice(0, 4000)}`;
-            const data = await openaiStyleChat([
-              { role: "system", content: "你是一個專業的實體識別與知識圖譜建構專家，請僅輸出乾淨的 JSON 物件。" },
-              { role: "user", content: extractPrompt },
-            ]);
+            const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "qwen2.5-7b-instruct",
+                messages: [
+                  { role: "system", content: "你是一個專業的實體識別與知識圖譜建構專家，請僅輸出乾淨的 JSON 物件。" },
+                  { role: "user", content: extractPrompt }
+                ],
+                temperature: 0.1,
+                max_tokens: 600
+              })
+            });
+            const data = await llamaRes.json();
             const rawJson = data?.choices?.[0]?.message?.content?.trim();
             const cleanJsonMatch = rawJson.match(/\{[\s\S]*\}/);
             if (cleanJsonMatch) {
@@ -1118,9 +1135,8 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         "Content-Type": contentType,
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
-        "Expires": "0",
-        "Permissions-Policy": "microphone=(self), display-capture=(self)",
-      },
+        "Expires": "0"
+      }
     });
   } catch (_) {
     return new Response("404 Not Found", { status: 404 });

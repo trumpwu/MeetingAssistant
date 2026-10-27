@@ -1,9 +1,6 @@
 # 🎙️ AI 智慧會議記錄助理 (AI Meeting Assistant)
 
-基於 **DeepSeek V4.1 Flash Free（OpenCode 免費雲端）** 與 **本地語音識別引擎** 的會議助理系統。
-
-> **現行 LLM**：OpenCode Zen 免費模型 `opencode/deepseek-v4.1-flash-free`（經本機 `opencode serve` :4096）。  
-> 語音轉錄（SenseVoice / Whisper）仍在本機；**會議摘要／翻譯會送上免費雲端**，免費期間資料可能用於模型改進——機密會議請改回本地 Qwen 或勿使用。
+基於 **Qwen 2.5 7B Instruct (32K 超長上下文)** 與 **本地即時語音識別 / 翻譯引擎** 的高階離線商務會議助理系統。
 
 ---
 
