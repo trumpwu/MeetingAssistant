@@ -13,8 +13,8 @@
       <div class="logo-group">
         <div class="logo-icon">🎙️</div>
         <div>
-          <h1 id="app-title">AI 智慧會議逐字稿助理</h1>
-          <p id="app-subtitle" class="subtitle">⚡ 現場錄音 / 音檔極速轉繁中逐字稿 • 英文會議即時字幕 • 一鍵複製貼上線上 Gemini / NotebookLM</p>
+          <h1 id="app-title">AI 智慧會議多語系助理</h1>
+          <p id="app-subtitle" class="subtitle">⚡ NVIDIA Nemotron 3.5 多國語音同傳 • 中文模式自動隱藏逐字稿 • 外語模式顯示即時繁中字幕與逐字稿</p>
         </div>
       </div>
       <div class="header-actions">
@@ -22,8 +22,16 @@
         <div class="engine-select-group">
           <label for="engine-mode-select" id="engine-label" class="engine-label">🧠 會議語言模式：</label>
           <select id="engine-mode-select" class="engine-select">
-            <option value="sensevoice" selected>🇹🇼 中文 / 中英混合會議（免字幕 • 極速產出繁中逐字稿）</option>
-            <option value="english_live">🌐 英文會議（開啟英文翻中文即時字幕 + 逐字稿）</option>
+            <option value="sensevoice" selected>🇹🇼 中文會議（隱藏逐字稿 • 背景收錄直接一鍵複製貼給 AI）</option>
+            <option value="en-US">🇺🇸 英文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="ja-JP">🇯🇵 日文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="ko-KR">🇰🇷 韓文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="de-DE">🇩🇪 德文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="fr-FR">🇫🇷 法文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="es-ES">🇪🇸 西班牙文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="vi-VN">🇻🇳 越南文會議（NVIDIA Nemotron 3.5 多語同傳 • 顯示字幕與逐字稿）</option>
+            <option value="th-TH">🇹🇭 泰文 / 東南亞語系（NVIDIA Nemotron 3.5 多語同傳 • 顯示逐字稿）</option>
+            <option value="auto-multi">🌍 全球 40 語系自動偵測（NVIDIA Nemotron 3.5 跨國多語同傳 • 顯示逐字稿）</option>
           </select>
         </div>
 
@@ -99,8 +107,8 @@
             </div>
 
             <div class="form-group">
-              <label id="label-attendees" for="meeting-attendees">出席人員 / 記錄者</label>
-              <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：張主管、李工程師、專案團隊">
+              <label id="label-attendees" for="meeting-attendees">👥 出席人員與單位（填寫後 AI 將依對話語意自動歸納負責人，免手動換標籤）</label>
+              <input type="text" id="meeting-attendees" class="form-control" placeholder="例如：張主管、李工程師、台達代表、專案團隊">
             </div>
 
             <div class="form-group" style="display: none;">
@@ -199,10 +207,10 @@
               </button>
             </div>
 
-            <!-- NVIDIA Nemotron 3 Diarization Toggle & Badge -->
-            <div class="diarize-toggle-row">
+            <!-- NVIDIA Nemotron 3 Diarization Toggle (Default off for single-mic room clarity) -->
+            <div class="diarize-toggle-row" style="display: none;">
               <label class="toggle-checkbox-label">
-                <input type="checkbox" id="enable-nemotron-diarize" checked>
+                <input type="checkbox" id="enable-nemotron-diarize">
                 <span>🎯 啟用 NVIDIA Nemotron 3 智慧話者分離 (多人會議重疊發言與分軌識別)</span>
               </label>
               <span class="badge-nvidia">🟢 NVIDIA NeMo 100M 就緒</span>
@@ -219,13 +227,13 @@
               <button type="button" id="browse-file-btn" class="btn btn-outline btn-sm">選擇 M4A / 影音檔案</button>
             </div>
             <div id="file-transcribe-progress" class="transcribe-progress" style="display: none;">
-              <span class="spinner">⏳</span> <span>正在以本地端 AI 轉錄與 NVIDIA 話者分離處理中...</span>
+              <span class="spinner">⏳</span> <span>正在以本地端 AI 極速語音轉錄處理中...</span>
             </div>
           </div>
         </div>
 
-        <!-- Speaker Mapping Card -->
-        <div class="card">
+        <!-- Speaker Mapping Card (Hidden to prevent mis-replacement when single-mic speaker tags jump) -->
+        <div class="card" style="display: none;">
           <div class="card-header">
             <span id="tag-step-speaker" class="card-tag">發言人對應</span>
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -276,16 +284,32 @@
               </div>
             </div>
 
-            <!-- Real-Time Instant Live Translation Subtitle Bar (Shown only in English mode) -->
+            <!-- Real-Time Instant Live Translation Subtitle Bar (Shown only in Foreign Language modes) -->
             <div class="live-subtitle-bar" id="live-subtitle-bar" style="display: none;">
               <div class="live-pulse-dot"></div>
               <div class="live-text-wrap">
-                <span class="live-stream-tag">⚡ 英文即時翻中字幕：</span>
-                <span id="live-stream-text" class="live-stream-text">（等待英文語音輸入，說話時繁體中文字幕將即時跳出...）</span>
+                <span class="live-stream-tag" id="live-stream-tag">⚡ 外語即時翻中字幕：</span>
+                <span id="live-stream-text" class="live-stream-text">（等待外語語音輸入，說話時繁體中文字幕將即時跳出...）</span>
               </div>
             </div>
 
-            <textarea id="raw-transcript" class="form-control transcript-textarea" style="min-height: 520px; flex: 1;" placeholder="現場錄音或拖曳音檔後，繁體中文逐字稿將自動顯示於此處..."></textarea>
+            <!-- Chinese Mode Transcript Mask Box (Shown in Chinese mode so raw transcript is hidden) -->
+            <div id="chinese-mode-mask-box" style="flex: 1; min-height: 460px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 36px 28px; background: linear-gradient(145deg, #f8fafc 0%, #eff6ff 100%); border: 2px dashed #93c5fd; border-radius: 12px; gap: 14px;">
+              <div id="masked-status-icon" style="font-size: 52px; line-height: 1;">🙈</div>
+              <h3 id="masked-status-title" style="margin: 0; font-size: 19px; color: #1e3a8a; font-weight: 800;">🇹🇼 中文會議模式：已依設定將逐字稿畫面遮蔽隱藏</h3>
+              <p id="masked-status-desc" style="margin: 0; max-width: 520px; font-size: 14.5px; color: #475569; line-height: 1.65;">
+                中文會議不需顯示冗長逐字稿。系統會在背景自動收錄所有語音並存檔，錄音或匯入音檔後，請直接點擊下方按鈕<strong>一鍵複製貼給 Gemini / Outlook / NotebookLM</strong>！<br>
+                <span style="font-size: 13px; color: #0284c7;">（💡 若切換上方選單至「🇺🇸 英文 / 🇯🇵 日文 / 🇰🇷 韓文 / 🌍 多國語系」，將自動顯示即時翻譯字幕與逐字稿）</span>
+              </p>
+              <div id="masked-char-count-badge" style="margin-top: 6px; padding: 8px 18px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-weight: 700; font-size: 14px;">
+                🎙️ 背景待命中（目前收錄：0 字）
+              </div>
+              <button type="button" id="toggle-peek-transcript-btn" class="btn-text" style="margin-top: 10px; font-size: 12.5px; color: #64748b; text-decoration: underline;">
+                👁️ 臨時展開檢視原始逐字稿
+              </button>
+            </div>
+
+            <textarea id="raw-transcript" class="form-control transcript-textarea" style="min-height: 520px; flex: 1; display: none;" placeholder="現場錄音或拖曳音檔後，外語翻繁體中文逐字稿將自動顯示於此處..."></textarea>
             
             <!-- High-Visibility Copy Success Banner -->
             <div id="copy-status-banner" style="display: none; margin-top: 12px; padding: 12px 16px; border-radius: 8px; background: #dcfce7; border: 2px solid #16a34a; color: #14532d; font-weight: 700; font-size: 14.5px; align-items: center; justify-content: space-between; box-shadow: 0 4px 12px rgba(22, 163, 74, 0.15);">
@@ -394,10 +418,10 @@
       <div class="status-indicators">
         <span class="status-pill status-ok"><span class="dot"></span> 本地轉錄服務：127.0.0.1:8088</span>
         <span class="status-pill status-ok"><span class="dot"></span> 阿里 SenseVoice 50x 極速語音：就緒</span>
-        <span class="status-pill status-ok"><span class="dot"></span> NVIDIA Nemotron 3 話者分離：就緒</span>
+        <span class="status-pill status-ok"><span class="dot"></span> NVIDIA Nemotron 3.5 (40語系 & 話者分離)：就緒</span>
       </div>
       <div class="status-log-preview" id="status-log-preview">
-        <span class="log-tag">狀態</span> <span id="latest-log-text">系統就緒，本地語音轉錄服務已連線。</span>
+        <span class="log-tag">狀態</span> <span id="latest-log-text">系統就緒，NVIDIA Nemotron 3.5 多語系與本地轉錄服務已連線。</span>
         <button id="toggle-log-drawer-btn" class="btn-text btn-sm" title="展開完整系統紀錄">📜 展開日誌</button>
       </div>
     </footer>
@@ -418,6 +442,6 @@
     <div id="toast" class="toast"></div>
   </div>
 
-  <script src="app.js?v=20261027_clean3"></script>
+  <script src="app.js?v=20261102_nospeakerbug"></script>
 </body>
 </html>

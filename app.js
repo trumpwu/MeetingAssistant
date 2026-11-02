@@ -293,12 +293,120 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // --- Language Mode & Chinese Transcript Masking Helpers ---
+  const chineseModeMaskBox = document.getElementById('chinese-mode-mask-box');
+  const maskedStatusIcon = document.getElementById('masked-status-icon');
+  const maskedStatusTitle = document.getElementById('masked-status-title');
+  const maskedCharCountBadge = document.getElementById('masked-char-count-badge');
+  const togglePeekTranscriptBtn = document.getElementById('toggle-peek-transcript-btn');
+  const liveStreamTag = document.getElementById('live-stream-tag');
+  let isPeekingChineseTranscript = false;
+
+  function isChineseMeetingMode() {
+    if (!engineSelect) return true;
+    const val = engineSelect.value;
+    return val === 'sensevoice' || val === 'sensevoice_fast' || val === 'zh-TW';
+  }
+
+  function isForeignMeetingMode() {
+    return !isChineseMeetingMode();
+  }
+
+  function getSelectedLangLabel() {
+    if (!engineSelect) return '🇹🇼 中文';
+    const map = {
+      'sensevoice': '🇹🇼 中文',
+      'sensevoice_fast': '🇹🇼 中文極速',
+      'en-US': '🇺🇸 英文',
+      'english_live': '🇺🇸 英文',
+      'ja-JP': '🇯🇵 日文',
+      'ko-KR': '🇰🇷 韓文',
+      'de-DE': '🇩🇪 德文',
+      'fr-FR': '🇫🇷 法文',
+      'es-ES': '🇪🇸 西班牙文',
+      'vi-VN': '🇻🇳 越南文',
+      'th-TH': '🇹🇭 泰文/東南亞語系',
+      'auto-multi': '🌍 全球 40 語系'
+    };
+    return map[engineSelect.value] || '🌐 多語系';
+  }
+
+  function getSpeechRecognizerLang() {
+    if (isChineseMeetingMode()) return 'zh-TW';
+    const val = engineSelect ? engineSelect.value : 'en-US';
+    if (val === 'auto-multi' || val === 'english_live' || val === 'whisper' || val === 'whisper-base-tr') {
+      return 'en-US';
+    }
+    return val;
+  }
+
+  function syncLanguageModeUI() {
+    const isZh = isChineseMeetingMode();
+    const liveSubtitleBar = document.getElementById('live-subtitle-bar');
+
+    if (isZh) {
+      // Chinese mode: Hide live subtitle bar & hide raw transcript by default (unless user clicked peek)
+      if (liveSubtitleBar) liveSubtitleBar.style.display = 'none';
+      if (chineseModeMaskBox) {
+        chineseModeMaskBox.style.display = 'flex';
+        chineseModeMaskBox.style.minHeight = isPeekingChineseTranscript ? 'auto' : '460px';
+        chineseModeMaskBox.style.padding = isPeekingChineseTranscript ? '16px 20px' : '36px 28px';
+      }
+      if (rawTranscript) {
+        rawTranscript.style.display = isPeekingChineseTranscript ? 'block' : 'none';
+      }
+      if (togglePeekTranscriptBtn) {
+        togglePeekTranscriptBtn.textContent = isPeekingChineseTranscript
+          ? '🙈 隱藏原始逐字稿（恢復遮蔽模式）'
+          : '👁️ 臨時展開檢視原始逐字稿';
+      }
+    } else {
+      // Foreign language mode: Show both live translated subtitle bar & full transcript textarea!
+      const langLabel = getSelectedLangLabel();
+      if (chineseModeMaskBox) chineseModeMaskBox.style.display = 'none';
+      if (liveSubtitleBar) liveSubtitleBar.style.display = 'flex';
+      if (liveStreamTag) liveStreamTag.textContent = `⚡ ${langLabel} ➔ 繁中即時字幕：`;
+      if (rawTranscript) rawTranscript.style.display = 'block';
+    }
+  }
+
+  if (togglePeekTranscriptBtn) {
+    togglePeekTranscriptBtn.addEventListener('click', () => {
+      isPeekingChineseTranscript = !isPeekingChineseTranscript;
+      syncLanguageModeUI();
+    });
+  }
+
   // --- Transcript Stats & Clean ---
   function updateTranscriptStats() {
     const text = rawTranscript.value;
-    const charCount = text.length;
-    const lineCount = text ? text.split('\n').filter(l => l.trim().length > 0).length : 0;
+    const trimmed = text.trim();
+    const isSysPlaceholder = trimmed.startsWith('[系統提示]');
+    const charCount = isSysPlaceholder ? 0 : text.length;
+    const lineCount = (!isSysPlaceholder && text) ? text.split('\n').filter(l => l.trim().length > 0).length : 0;
     transcriptStats.textContent = `字數：${charCount} | 行數：${lineCount}`;
+
+    if (maskedCharCountBadge && maskedStatusIcon && maskedStatusTitle) {
+      if (isSysPlaceholder) {
+        maskedStatusIcon.textContent = '⏳';
+        maskedStatusTitle.textContent = '⏳ 本地 AI 正在於背景高速轉錄中文語音中，請稍候...';
+        maskedCharCountBadge.textContent = '🎙️ 背景轉錄與校準處理中...';
+        maskedCharCountBadge.style.background = '#fef3c7';
+        maskedCharCountBadge.style.color = '#b45309';
+      } else if (charCount > 0) {
+        maskedStatusIcon.textContent = '✅';
+        maskedStatusTitle.textContent = '🇹🇼 中文語音已於背景收錄完成（逐字稿已自動隱藏）';
+        maskedCharCountBadge.textContent = `📊 背景已收錄：${charCount.toLocaleString()} 字 ｜ ${lineCount} 行（可直接點擊下方按鈕複製！）`;
+        maskedCharCountBadge.style.background = '#dcfce7';
+        maskedCharCountBadge.style.color = '#15803d';
+      } else {
+        maskedStatusIcon.textContent = '🙈';
+        maskedStatusTitle.textContent = '🇹🇼 中文會議模式：已依設定將逐字稿畫面遮蔽隱藏';
+        maskedCharCountBadge.textContent = '🎙️ 背景待命中（目前收錄：0 字）';
+        maskedCharCountBadge.style.background = '#dbeafe';
+        maskedCharCountBadge.style.color = '#1d4ed8';
+      }
+    }
   }
 
   rawTranscript.addEventListener('input', updateTranscriptStats);
@@ -353,11 +461,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     speechRecognizer.onresult = (event) => {
       let interim = '';
-      const isEnglishMode = engineSelect && (
-        engineSelect.value === 'whisper' ||
-        engineSelect.value === 'whisper-base-tr' ||
-        engineSelect.value === 'english_live'
-      );
+      const isForeign = isForeignMeetingMode();
+      const currentLangCode = engineSelect ? engineSelect.value : 'sensevoice';
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const transcriptChunk = event.results[i][0].transcript;
@@ -366,40 +471,35 @@ document.addEventListener('DOMContentLoaded', () => {
           const finalRaw = transcriptChunk.trim();
           if (finalRaw) {
             const nowTime = new Date().toLocaleTimeString('zh-TW', { hour12: false });
-            const spkTag = `Speaker ${currentSpeakerIndex}`;
 
-            if (isEnglishMode) {
+            if (isForeign) {
               const tempTrans = quickLiveTranslate(finalRaw);
-              liveStreamText.textContent = `⚡ 正在翻譯：${tempTrans || finalRaw}`;
+              liveStreamText.textContent = `⚡ 正在翻譯 (${getSelectedLangLabel()})：${tempTrans || finalRaw}`;
 
               fetch('/api/translate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: finalRaw })
+                body: JSON.stringify({ text: finalRaw, lang: currentLangCode })
               }).then(res => res.json()).then(data => {
                 const chineseLine = (data.success && data.translated) ? data.translated : tempTrans;
-                const formattedLine = `[${nowTime}] [${spkTag}]: ${chineseLine}`;
+                const formattedLine = `[${nowTime}] ${chineseLine}`;
                 rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
                 rawTranscript.scrollTop = rawTranscript.scrollHeight;
                 updateTranscriptStats();
-                liveStreamText.textContent = `✅ [${spkTag}]: ${chineseLine}`;
+                liveStreamText.textContent = `✅ ${chineseLine}`;
               }).catch(() => {
-                const formattedLine = `[${nowTime}] [${spkTag}]: ${tempTrans || finalRaw}`;
+                const formattedLine = `[${nowTime}] ${tempTrans || finalRaw}`;
                 rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
                 rawTranscript.scrollTop = rawTranscript.scrollHeight;
                 updateTranscriptStats();
               });
             } else {
-              // Chinese Mode - Immediately print formatted subtitles into rawTranscript!
-              const formattedLine = `[${nowTime}] [${spkTag}]: ${finalRaw}`;
+              // Chinese Mode - Quietly capture clean timestamped text in background while UI remains masked!
+              const formattedLine = `[${nowTime}] ${finalRaw}`;
               rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
               rawTranscript.scrollTop = rawTranscript.scrollHeight;
               updateTranscriptStats();
-              liveStreamText.textContent = `🎙️ [${spkTag}]: ${finalRaw}`;
-            }
-
-            if (finalRaw.endsWith('.') || finalRaw.endsWith('。') || finalRaw.length > 25) {
-              currentSpeakerIndex = (currentSpeakerIndex % 3) + 1;
+              liveStreamText.textContent = `🎙️ ${finalRaw}`;
             }
           }
         } else {
@@ -411,9 +511,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Rolling real-time subtitle window (0ms instant preview without GPU blocking)
       if (interim.trim()) {
         const liveRaw = interim.trim();
-        if (isEnglishMode) {
+        if (isForeign) {
           const instantZh = quickLiveTranslate(liveRaw);
-          liveStreamText.textContent = `🎙️ 正在說話 (英)：${liveRaw}  ➔  [${instantZh || '即時轉譯中...'}]`;
+          liveStreamText.textContent = `🎙️ 正在說話 (${getSelectedLangLabel()})：${liveRaw}  ➔  [${instantZh || '即時轉譯中...'}]`;
         } else {
           liveStreamText.textContent = `🎙️ 正在說話：${liveRaw}`;
         }
@@ -449,7 +549,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    // Watchdog timer: Guarantees speech recognition NEVER interrupts (English & Chinese)
+    // Watchdog timer: Guarantees speech recognition NEVER interrupts
     setInterval(() => {
       if (isRecording && !isRecognizerRunning) {
         try {
@@ -457,31 +557,34 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (_) {}
       }
     }, 1200);
+  }
 
-    // Language switcher event listener
-    if (engineSelect) {
-      engineSelect.addEventListener('change', () => {
-        const isEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
-        speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
+  // Language switcher event listener (works whether or not Web Speech API is active)
+  if (engineSelect) {
+    engineSelect.addEventListener('change', () => {
+      isPeekingChineseTranscript = false;
+      syncLanguageModeUI();
+      if (speechRecognizer) {
+        speechRecognizer.lang = getSpeechRecognizerLang();
         if (isRecording) {
           try { speechRecognizer.stop(); } catch (_) {}
         }
-        const liveSubtitleBar = document.getElementById('live-subtitle-bar');
-        if (liveSubtitleBar) {
-          liveSubtitleBar.style.display = isEng ? 'flex' : 'none';
-        }
-        if (waveText) {
-          waveText.textContent = isEng ?
-            '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
-        }
-      });
-      // Initial state
-      const initialIsEng = engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live';
-      const liveSubtitleBar = document.getElementById('live-subtitle-bar');
-      if (liveSubtitleBar) {
-        liveSubtitleBar.style.display = initialIsEng ? 'flex' : 'none';
       }
-    }
+      if (waveText) {
+        waveText.textContent = isForeignMeetingMode()
+          ? `正在即時聽取 ${getSelectedLangLabel()} 並透過 NVIDIA Nemotron 3.5 自動轉譯為繁體中文...`
+          : '正在以阿里 SenseVoice 50x 於背景極速聽取繁體中文（逐字稿已自動隱藏）...';
+      }
+      showToast(
+        isForeignMeetingMode()
+          ? `🌐 已切換為【${getSelectedLangLabel()}】模式：已自動開啟即時繁中字幕與逐字稿！`
+          : '🇹🇼 已切換為【中文會議】模式：已自動隱藏逐字稿畫面，直接於背景收錄並供一鍵複製！',
+        3500
+      );
+    });
+    // Initial UI state on page load
+    syncLanguageModeUI();
+    updateTranscriptStats();
   }
 
   function updateTimer() {
@@ -592,10 +695,12 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
         }
 
-        // 2. Guaranteed Local Offline AI Auto-Transcribe (SenseVoice 50x + Qwen 2.5 Two-Stage Calibration)
-        const isEngMode = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
-        const currentEngine = isEngMode ? 'english_live' : ((engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice');
-        const engineLabel = isEngMode ? 'SenseVoice 英文辨識 + Qwen 2.5 繁中同傳' : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準');
+        // 2. Guaranteed Local Offline AI Auto-Transcribe (NVIDIA Nemotron 3.5 Multilingual + SenseVoice 50x)
+        const isForeign = isForeignMeetingMode();
+        const currentEngine = engineSelect ? engineSelect.value : 'sensevoice';
+        const engineLabel = isForeign
+          ? `NVIDIA Nemotron 3.5 (${getSelectedLangLabel()}) ➔ 繁中同傳`
+          : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : 'SenseVoice 50x + Qwen 2.5 雙層語意校準');
         const existingLive = rawTranscript.value.trim();
         if (!existingLive) {
           rawTranscript.value = `[系統提示] 🎙️ 現場錄音已結束 (檔案大小: ${sizeMb} MB)！\n本地端 ${engineLabel} 正在進行智慧轉錄與實體校準中，請稍候...`;
@@ -637,7 +742,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 diarizeBadge.textContent = `🎯 NVIDIA 識別出 ${data.speakers ? data.speakers.length : ''} 位發言人`;
               }
             } else {
-              let curSpeaker = 1;
               formatted = data.transcript
                 .split('\n')
                 .map(l => l.trim())
@@ -645,11 +749,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .map((l, i) => {
                   const clean = l.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
                   if (!clean) return '';
-                  const spk = `[Speaker ${curSpeaker}]`;
-                  if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
-                    curSpeaker = curSpeaker === 1 ? 2 : 1;
-                  }
-                  return `[發言 ${i + 1}] ${spk}: ${clean}`;
+                  return `[發言 ${i + 1}] ${clean}`;
                 })
                 .filter(l => l.length > 0)
                 .join('\n');
@@ -659,13 +759,8 @@ document.addEventListener('DOMContentLoaded', () => {
               setTimeout(() => { if (typeof autoDetectSpeakers === 'function') autoDetectSpeakers(); }, 200);
             }
             
-            // If English live translation already captured a solid transcript, preserve it or complement it
-            if (isEngMode && existingLive && existingLive.length > 80 && !existingLive.includes('[系統提示]')) {
-              console.log('Preserving high-precision real-time live English translation.');
-            } else {
-              rawTranscript.value = formatted;
-              updateTranscriptStats();
-            }
+            rawTranscript.value = formatted;
+            updateTranscriptStats();
 
             // Auto-save transcript into meeting folder
             const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
@@ -706,8 +801,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Start Speech Recognizer with configured language
       if (speechRecognizer) {
-        const isEng = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live'));
-        speechRecognizer.lang = isEng ? 'en-US' : 'zh-TW';
+        speechRecognizer.lang = getSpeechRecognizerLang();
         try { speechRecognizer.abort(); } catch (_) {}
         setTimeout(() => {
           try {
@@ -727,8 +821,9 @@ document.addEventListener('DOMContentLoaded', () => {
       recordStatusBadge.textContent = '錄音辨識中';
       recordStatusBadge.className = 'badge badge-recording';
       waveContainer.classList.add('recording');
-      waveText.textContent = (engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live')) ?
-        '正在即時聽取英文並自動轉譯為繁體中文...' : '正在以阿里 SenseVoice 50x 極速聽取繁體中文...';
+      waveText.textContent = isForeignMeetingMode()
+        ? `正在即時聽取 ${getSelectedLangLabel()} 並透過 NVIDIA Nemotron 3.5 自動轉譯為繁體中文...`
+        : '正在以阿里 SenseVoice 50x 於背景極速聽取繁體中文（逐字稿已自動隱藏）...';
       
       showToast('🔴 錄音與即時辨識已啟動！');
     } catch (err) {
@@ -852,10 +947,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function handleAudioFileUpload(file) {
     if (!file) return;
-    const isEng = engineSelect && (engineSelect.value === 'whisper' || engineSelect.value === 'whisper-base-tr' || engineSelect.value === 'english_live');
-    const currentEngine = isEng ? 'english_live' : ((engineSelect && engineSelect.value === 'sensevoice_fast') ? 'sensevoice_fast' : 'sensevoice');
-    const engineLabel = isEng ? 'SenseVoice 英文辨識 + Qwen 2.5 繁中同傳' : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : '阿里 SenseVoice (50x 極速繁中)');
+    const isForeign = isForeignMeetingMode();
+    const currentEngine = engineSelect ? engineSelect.value : 'sensevoice';
+    const engineLabel = isForeign
+      ? `NVIDIA Nemotron 3.5 (${getSelectedLangLabel()}) ➔ 繁中自動翻譯`
+      : (currentEngine === 'sensevoice_fast' ? 'SenseVoice 50x 原生極速' : '阿里 SenseVoice (50x 極速繁中)');
     fileTranscribeProgress.style.display = 'flex';
+    if (maskedStatusIcon && maskedStatusTitle && maskedCharCountBadge && !isForeign) {
+      maskedStatusIcon.textContent = '⏳';
+      maskedStatusTitle.textContent = `⏳ 正在於背景轉錄音檔：${file.name}...`;
+      maskedCharCountBadge.textContent = '🎙️ 本地 AI 轉錄與話者分離處理中...';
+      maskedCharCountBadge.style.background = '#fef3c7';
+      maskedCharCountBadge.style.color = '#b45309';
+    }
     showToast(`🎙️ 正在以 ${engineLabel} 轉錄 ${file.name} (請稍候)...`, 4000);
 
     try {
@@ -892,7 +996,6 @@ document.addEventListener('DOMContentLoaded', () => {
             diarizeBadge.textContent = `🎯 NVIDIA 識別出 ${data.speakers ? data.speakers.length : ''} 位發言人`;
           }
         } else {
-          let curSpeaker = 1;
           formatted = data.transcript
             .split('\n')
             .map(line => line.trim())
@@ -900,11 +1003,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .map((line, idx) => {
               const clean = line.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '').trim();
               if (!clean) return '';
-              const spk = `[Speaker ${curSpeaker}]`;
-              if (clean.endsWith('？') || clean.endsWith('?') || clean.endsWith('。') || clean.length > 28) {
-                curSpeaker = curSpeaker === 1 ? 2 : 1;
-              }
-              return `[語音匯入 ${idx + 1}] ${spk}: ${clean}`;
+              return `[語音匯入 ${idx + 1}] ${clean}`;
             })
             .filter(l => l.length > 0)
             .join('\n');
@@ -2050,19 +2149,25 @@ ${transcript || '（無逐字稿內容）'}
   const copyTranscriptCleanBtn = document.getElementById('copy-transcript-clean-btn');
   if (copyTranscriptCleanBtn) {
     copyTranscriptCleanBtn.addEventListener('click', async () => {
-      applySpeakerMappingToTranscript();
       const title = (titleInput && titleInput.value.trim()) ? titleInput.value.trim() : '會議討論';
       const mDate = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
       const mLoc = (locationInput && locationInput.value.trim()) ? locationInput.value.trim() : '公司會議室';
       const mAtt = (attendeesInput && attendeesInput.value.trim()) ? attendeesInput.value.trim() : '與會人員';
-      const transcript = rawTranscript ? rawTranscript.value.trim() : '';
+      const rawText = rawTranscript ? rawTranscript.value.trim() : '';
 
-      if (!transcript) {
+      if (!rawText) {
         showToast('⚠️ 目前逐字稿尚無內容，請先錄音或匯入音檔！', 3000);
         return;
       }
 
+      // Strip any noisy [Speaker X]: tags so AI relies purely on real context & attendee list
+      const transcript = rawText.replace(/\[Speaker\s*\d+\]:?\s*/gi, '');
+
       const formatted = `請擔任專業的高階主管會議記錄秘書，根據以下會議逐字稿，使用道地、嚴謹的台灣繁體中文商務用語，客觀整理成一份【正式、詳實、結構化的商務會議紀錄】。
+
+【重要發言人與職責歸納原則】：
+- 本場會議出席人員／單位為：${mAtt}
+- 由於會議室使用單一麥克風收音，請直接根據「對話上下文語意（如自稱、點名、提問與回答脈絡、專業領域）」並對照「出席人員名單」來歸納各方發言觀點與待辦事項主責人員，切勿受困於單一語句斷句。
 
 【格式要求】：
 # 📝 ${title} - 正式會議紀錄
@@ -2116,17 +2221,19 @@ ${transcript}
   const copyOutlookPromptBtn = document.getElementById('copy-outlook-prompt-btn');
   if (copyOutlookPromptBtn) {
     copyOutlookPromptBtn.addEventListener('click', async () => {
-      applySpeakerMappingToTranscript();
       const title = (titleInput && titleInput.value.trim()) ? titleInput.value.trim() : '會議討論';
       const mDate = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
-      const transcript = rawTranscript ? rawTranscript.value.trim() : '';
+      const mAtt = (attendeesInput && attendeesInput.value.trim()) ? attendeesInput.value.trim() : '與會人員';
+      const rawText = rawTranscript ? rawTranscript.value.trim() : '';
 
-      if (!transcript) {
+      if (!rawText) {
         showToast('⚠️ 目前逐字稿尚無內容，請先錄音或匯入音檔！', 3000);
         return;
       }
 
-      const formatted = `請根據以下會議逐字稿，為我整理一份【極簡、重點條列、適合直接複製貼進 Outlook 信件寄給主管與同仁】的台灣繁體中文會議紀錄。
+      const transcript = rawText.replace(/\[Speaker\s*\d+\]:?\s*/gi, '');
+
+      const formatted = `請根據以下會議逐字稿（出席人員／單位：${mAtt}），並依據對話上下文脈絡辨識各方結論與負責人，為我整理一份【極簡、重點條列、適合直接複製貼進 Outlook 信件寄給主管與同仁】的台灣繁體中文會議紀錄。
 
 【格式要求】：
 主旨：【會議紀錄】${mDate} ${title}
@@ -2296,6 +2403,8 @@ ${transcript}
       }
 
       // 1. Clear transcript & output
+      isPeekingChineseTranscript = false;
+      syncLanguageModeUI();
       if (rawTranscript) {
         rawTranscript.value = '';
         updateTranscriptStats();

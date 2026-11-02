@@ -14,8 +14,9 @@ const senseVoiceCli = "D:\\project\\SenseVoice\\sherpa-onnx-v1.13.8-win-x64-shar
 const senseVoiceModel = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\model.int8.onnx";
 const senseVoiceTokens = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\tokens.txt";
 
-// NVIDIA NeMo-Speech / Nemotron 3 Diarization (Streaming Sortformer v2)
+// NVIDIA NeMo-Speech / Nemotron 3.5 40-Language ASR & Nemotron 3 Diarization (Streaming Sortformer v2)
 const nemoSpeechCli = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin\\nemo-speech.exe";
+const nemoBinDir = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin";
 
 function hasNemotronCli(): boolean {
   try {
@@ -23,6 +24,135 @@ function hasNemotronCli(): boolean {
   } catch (_) {
     return false;
   }
+}
+
+// Run NVIDIA Nemotron 3.5 Multilingual ASR (nvidia/nemotron-3.5-asr-streaming-0.6b, 40 languages)
+async function runNemotron35Asr(wavPath: string, langCode: string = "auto"): Promise<string> {
+  if (!hasNemotronCli()) return "";
+  try {
+    const args = ["transcribe", wavPath, "--model", "nemotron-3.5", "--format", "json"];
+    if (langCode && langCode !== "auto" && langCode !== "auto-multi") {
+      args.push("-l", langCode);
+    }
+    const cmd = new Deno.Command(nemoSpeechCli, {
+      args,
+      cwd: nemoBinDir,
+      signal: AbortSignal.timeout(45000)
+    });
+    const out = await cmd.output();
+    if (out.code === 0) {
+      const raw = new TextDecoder("utf-8").decode(out.stdout);
+      const jsonStart = raw.indexOf("{");
+      const jsonEnd = raw.lastIndexOf("}");
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        const parsed = JSON.parse(raw.substring(jsonStart, jsonEnd + 1));
+        if (parsed.text) return String(parsed.text).trim();
+        if (Array.isArray(parsed.segments)) {
+          return parsed.segments.map((s: any) => s.text || "").filter(Boolean).join("\n").trim();
+        }
+      }
+      return raw.trim();
+    }
+  } catch (err) {
+    console.warn("[Nemotron-3.5 ASR] Notice/fallback:", err);
+  }
+  return "";
+}
+
+// Fast Multilingual Translation to Taiwan Traditional Chinese (Supports 40+ Languages)
+async function translateToTraditionalChinese(text: string, sourceLang: string = "auto"): Promise<string> {
+  if (!text || !text.trim()) return "";
+  const cleanText = text.trim();
+
+  // Map BCP-47 locale to ISO-639-1 for translation
+  let sl = "auto";
+  if (sourceLang && sourceLang !== "auto" && sourceLang !== "auto-multi" && sourceLang !== "english_live") {
+    sl = sourceLang.split("-")[0].toLowerCase();
+  } else if (sourceLang === "english_live") {
+    sl = "en";
+  }
+
+  // Tier 1: Fast Chrome Dictionary Translation API (~60ms, supports all 40+ languages reliably)
+  try {
+    const lines = cleanText.split("\n");
+    const batchSize = 20;
+    const translatedChunks: string[] = [];
+
+    for (let i = 0; i < lines.length; i += batchSize) {
+      const batch = lines.slice(i, i + batchSize).join("\n");
+      const c5Url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(sl)}&tl=zh-TW&q=${encodeURIComponent(batch)}`;
+      const c5Res = await fetch(c5Url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (c5Res.ok) {
+        const c5Data = await c5Res.json();
+        let chunkTrans = "";
+        if (Array.isArray(c5Data)) {
+          if (typeof c5Data[0] === "string") {
+            chunkTrans = c5Data[0];
+          } else if (Array.isArray(c5Data[0]) && typeof c5Data[0][0] === "string") {
+            chunkTrans = c5Data.map((item: any) => (Array.isArray(item) ? item[0] : "")).join("");
+          }
+        }
+        if (chunkTrans) {
+          translatedChunks.push(toTaiwanTraditional(chunkTrans.trim()));
+          continue;
+        }
+      }
+      throw new Error("clients5 batch fallback");
+    }
+
+    if (translatedChunks.length > 0) {
+      return translatedChunks.join("\n");
+    }
+  } catch (_) {
+    // Fallback to Tier 2 MyMemory Neural MT or Local Qwen 2.5 7B LLM
+  }
+
+  // Tier 2: MyMemory Neural Translation Fallback
+  if (cleanText.length <= 500) {
+    try {
+      const pairLang = sl === "auto" ? "en" : sl;
+      const mmUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(cleanText)}&langpair=${encodeURIComponent(pairLang)}|zh-TW`;
+      const mmRes = await fetch(mmUrl, { signal: AbortSignal.timeout(6000) });
+      if (mmRes.ok) {
+        const mmData = await mmRes.json();
+        const mmText = mmData?.responseData?.translatedText;
+        if (mmText && typeof mmText === "string") {
+          return toTaiwanTraditional(mmText.trim());
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Tier 2: Offline Local Qwen 2.5 7B Instruct (Port 8080)
+  try {
+    const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "qwen2.5-7b-instruct",
+        messages: [
+          {
+            role: "system",
+            content: "你是專業的多國語言即時同聲傳譯員。請將以下外語發言直接翻譯為流暢地道的台灣繁體中文，保留時間與發言人標籤，嚴禁摘要，僅輸出繁體中文結果："
+          },
+          { role: "user", content: cleanText.slice(0, 12000) }
+        ],
+        temperature: 0.1,
+        max_tokens: 2048
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (llamaRes.ok) {
+      const data = await llamaRes.json();
+      const translated = data?.choices?.[0]?.message?.content?.trim();
+      if (translated) return toTaiwanTraditional(translated);
+    }
+  } catch (_) {}
+
+  return toTaiwanTraditional(cleanText);
 }
 
 async function runNemotronDiarization(wavPath: string): Promise<Array<{ start: number; end: number; speaker: number }>> {
@@ -404,13 +534,30 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         chunkFiles.sort();
       } catch (_) {}
 
-      // 2. Transcribe via Alibaba SenseVoice (FunASR Nano int8)
+      // 2. Transcribe via NVIDIA Nemotron 3.5 (40-Language ASR) + Alibaba SenseVoice (FunASR Nano int8)
       const requestedEngine = (req.headers.get("X-Engine") || "sensevoice").toLowerCase();
       const isFast = requestedEngine === "sensevoice_fast";
-      const isEnglish = requestedEngine === "english_live" || requestedEngine === "whisper";
+      const isChineseMode = requestedEngine === "sensevoice" || requestedEngine === "sensevoice_fast" || requestedEngine === "zh-tw";
+      const isForeignLanguage = !isChineseMode;
+      const useNemotronPrimary = ["de-de", "fr-fr", "es-es", "vi-vn", "th-th", "auto-multi"].includes(requestedEngine);
+
+      const langNameMap: Record<string, string> = {
+        "english_live": "英文 (en-US)",
+        "en-us": "英文 (en-US)",
+        "ja-jp": "日文 (ja-JP)",
+        "ko-kr": "韓文 (ko-KR)",
+        "de-de": "德文 (de-DE)",
+        "fr-fr": "法文 (fr-FR)",
+        "es-es": "西班牙文 (es-ES)",
+        "vi-vn": "越南文 (vi-VN)",
+        "th-th": "泰文/東南亞語系",
+        "auto-multi": "全球 40 語系自動偵測"
+      };
+      const langDisplayName = langNameMap[requestedEngine] || "外語多語系";
+
       let transcript = "";
-      const engineUsed = isEnglish
-        ? "SenseVoice 英文辨識 + Qwen 2.5 繁中同傳"
+      const engineUsed = isForeignLanguage
+        ? `NVIDIA Nemotron 3.5 多語系 (${langDisplayName}) ➔ 繁體中文自動翻譯`
         : (isFast ? "SenseVoice 50x 原生極速" : "SenseVoice 50x + Qwen 2.5 雙層語意校準");
 
       if (chunkFiles.length > 0) {
@@ -427,41 +574,62 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
           let pieceText = "";
 
-          // Alibaba SenseVoice: FunASR Nano int8
-          const senseVoice = new Deno.Command(senseVoiceCli, {
-            args: [
-              `--tokens=${senseVoiceTokens}`,
-              `--sense-voice-model=${senseVoiceModel}`,
-              "--sense-voice-language=auto",
-              "--sense-voice-use-itn=true",
-              "--num-threads=8",
-              chunkPath
-            ]
-          });
-          const svOut = await senseVoice.output();
-          if (svOut.code === 0) {
-            const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
-            for (const line of rawStdout.split("\n")) {
-              const trimmed = line.trim();
-              if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
-                try {
-                  const parsed = JSON.parse(trimmed);
-                  if (parsed.text) {
-                    if (diarSegments.length > 0) {
-                      const alignedLines = alignSenseVoiceWithDiarization(parsed, startSec, diarSegments);
-                      pieceText = alignedLines.join("\n");
-                    } else {
-                      pieceText = segmentSenseVoiceText(parsed);
+          // For European / Southeast Asian / 40-Language mode, run NVIDIA Nemotron 3.5 ASR first
+          if (useNemotronPrimary && hasNemotronCli()) {
+            const nemotronText = await runNemotron35Asr(chunkPath, requestedEngine);
+            if (nemotronText) {
+              pieceText = nemotronText;
+            }
+          }
+
+          // Run SenseVoice (or fallback if Nemotron 3.5 returned empty)
+          if (!pieceText) {
+            let svLang = "auto";
+            if (requestedEngine === "en-us" || requestedEngine === "english_live") svLang = "en";
+            else if (requestedEngine === "ja-jp") svLang = "ja";
+            else if (requestedEngine === "ko-kr") svLang = "ko";
+            else if (isChineseMode) svLang = "zh";
+
+            const senseVoice = new Deno.Command(senseVoiceCli, {
+              args: [
+                `--tokens=${senseVoiceTokens}`,
+                `--sense-voice-model=${senseVoiceModel}`,
+                `--sense-voice-language=${svLang}`,
+                "--sense-voice-use-itn=true",
+                "--num-threads=8",
+                chunkPath
+              ]
+            });
+            const svOut = await senseVoice.output();
+            if (svOut.code === 0) {
+              const rawStdout = new TextDecoder("utf-8").decode(svOut.stdout);
+              for (const line of rawStdout.split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith("{") && trimmed.includes('"text"')) {
+                  try {
+                    const parsed = JSON.parse(trimmed);
+                    if (parsed.text) {
+                      if (diarSegments.length > 0) {
+                        const alignedLines = alignSenseVoiceWithDiarization(parsed, startSec, diarSegments);
+                        pieceText = alignedLines.join("\n");
+                      } else {
+                        pieceText = segmentSenseVoiceText(parsed);
+                      }
+                      break;
                     }
-                    break;
-                  }
-                } catch (_) {}
+                  } catch (_) {}
+                }
               }
             }
           }
 
+          // Fallback to NVIDIA Nemotron 3.5 40-Language ASR if SenseVoice yielded nothing on foreign audio
+          if (!pieceText && isForeignLanguage && hasNemotronCli()) {
+            pieceText = await runNemotron35Asr(chunkPath, requestedEngine);
+          }
+
           if (pieceText) {
-            if (diarSegments.length > 0) {
+            if (diarSegments.length > 0 && pieceText.includes("[Speaker ")) {
               segmentTexts.push(pieceText);
             } else {
               segmentTexts.push(`${timeLabel}${pieceText}`);
@@ -489,43 +657,20 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         return Response.json({ success: false, error: "音訊轉錄結果為空，請確認檔案是否有清晰人聲。" });
       }
 
-      // If English meeting mode requested, translate English transcript to Traditional Chinese
+      // If Foreign Language meeting mode requested, translate foreign transcript to Traditional Chinese
       let calibratedTranscript = transcript;
-      if (isEnglish) {
+      if (isForeignLanguage) {
         try {
-          console.log("[Transcribe] English meeting mode: Translating English transcript to Traditional Chinese via Qwen 2.5...");
-          const transRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "qwen2.5-7b-instruct",
-              messages: [
-                {
-                  role: "system",
-                  content: "你是專業即時同聲傳譯專家。請將以下英文會議逐字稿翻譯為流暢地道的台灣繁體中文逐字稿，保留原發言順序與時間標籤（如 [MM:SS]），嚴禁做成摘要，直接輸出純繁體中文逐字稿："
-                },
-                {
-                  role: "user",
-                  content: transcript.slice(0, 16000)
-                }
-              ],
-              temperature: 0.1,
-              max_tokens: 4096
-            }),
-            signal: AbortSignal.timeout(30000)
-          });
-          if (transRes.ok) {
-            const transData = await transRes.json();
-            const translatedText = transData?.choices?.[0]?.message?.content?.trim();
-            if (translatedText && translatedText.length > 20) {
-              calibratedTranscript = translatedText;
-            }
+          console.log(`[Transcribe] 🌐 多語系會議模式 (${langDisplayName}): 正在將外語逐字稿自動翻譯為台灣繁體中文...`);
+          const translatedText = await translateToTraditionalChinese(transcript, requestedEngine);
+          if (translatedText && translatedText.length > 5) {
+            calibratedTranscript = translatedText;
           }
         } catch (err) {
-          console.warn("[Transcribe] English translation timeout/fallback to raw transcript:", err);
+          console.warn("[Transcribe] Multilingual translation notice/fallback to raw transcript:", err);
         }
       } else {
-        // 3. Stage 2 Calibration: Automatically calibrate raw transcript via Two-Stage Pipeline
+        // 3. Stage 2 Calibration: Automatically calibrate raw Chinese transcript via Two-Stage Pipeline
         calibratedTranscript = await calibrateTranscript(transcript, isFast);
       }
 
@@ -590,29 +735,14 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
     }
   }
 
-  // 2. API: /api/translate (English to Traditional Chinese)
+  // 2. API: /api/translate (Multilingual 40+ Languages to Taiwan Traditional Chinese)
   if (pathname === "/api/translate" && req.method === "POST") {
     try {
-      const { text } = await req.json();
+      const { text, lang } = await req.json();
       if (!text) return Response.json({ success: false, translated: "" });
 
-      const llamaRes = await fetch("http://127.0.0.1:8080/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "qwen2.5-7b-instruct",
-          messages: [
-            { role: "system", content: "你是專業即時同聲傳譯員，請將英文句子直接翻譯成流暢的繁體中文，僅輸出繁中結果：" },
-            { role: "user", content: text }
-          ],
-          temperature: 0.1,
-          max_tokens: 256
-        }),
-        signal: AbortSignal.timeout(8000)
-      });
-      const data = await llamaRes.json();
-      const translated = data?.choices?.[0]?.message?.content?.trim() || text;
-      return Response.json({ success: true, translated });
+      const translated = await translateToTraditionalChinese(text, lang || "auto");
+      return Response.json({ success: true, translated: translated || text });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }

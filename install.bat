@@ -71,18 +71,19 @@ if not exist "%MODELS_DIR%\%MODEL_FILE%" (
 echo  核心 AI 模型 [%MODEL_FILE%] 就緒！
 echo.
 
-:: 4. NVIDIA Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)
-echo [4/5] 檢查 NVIDIA Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)...
+:: 4. NVIDIA Nemotron 3.5 多語系語音 & Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)
+echo [4/5] 檢查 NVIDIA Nemotron 3.5 多語系語音引擎 (NeMo-Speech.cpp)...
 if not exist "%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" (
     echo 正在下載 NeMo-Speech.cpp 引擎 (CPU 版)...
     if not exist "%BASE_DIR%\NeMo-Speech" mkdir "%BASE_DIR%\NeMo-Speech"
     curl -L -o "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.2.0/nemo-speech-0.2.0-windows-x86_64-cpu.zip" --progress-bar
     tar -xf "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" -C "%BASE_DIR%\NeMo-Speech"
     del "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip"
-    echo 正在拉取 Nemotron 3 Diarization 輕量模型 (102 MB)...
-    "%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3-diarization
 )
-echo  NVIDIA Nemotron 3 話者分離引擎就緒！
+echo 正在拉取/確認 NVIDIA Nemotron 3.5 40語系語音模型 (707 MB) 與話者分離模型...
+"%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3.5
+"%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3-diarization
+echo  NVIDIA Nemotron 3.5 多語系語音與話者分離引擎就緒！
 echo.
 
 :: 5. 編譯與建立原生 Windows 桌面主程式 (.exe) 與訓練工具
