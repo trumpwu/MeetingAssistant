@@ -459,6 +459,46 @@ document.addEventListener('DOMContentLoaded', () => {
     speechRecognizer.interimResults = true;
     speechRecognizer.maxAlternatives = 1;
 
+    // SimulStreaming-style LRU Translation Cache & Debounced Interim Streaming State
+    const translationCache = new Map();
+    let lastInterimRequested = '';
+    let lastInterimTranslated = '';
+    let interimDebounceTimer = null;
+    let interimAbortController = null;
+
+    async function fetchFastTranslation(text, langCode, isInterim = false) {
+      const clean = text.trim();
+      if (!clean) return '';
+      const cacheKey = `${langCode}::${clean.toLowerCase()}`;
+      if (translationCache.has(cacheKey)) {
+        return translationCache.get(cacheKey);
+      }
+
+      if (isInterim) {
+        if (interimAbortController) {
+          try { interimAbortController.abort(); } catch (_) {}
+        }
+        interimAbortController = new AbortController();
+      }
+
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean, lang: langCode }),
+        signal: isInterim && interimAbortController ? interimAbortController.signal : undefined
+      });
+      const data = await res.json();
+      if (data && data.success && data.translated) {
+        if (translationCache.size > 300) {
+          const firstKey = translationCache.keys().next().value;
+          translationCache.delete(firstKey);
+        }
+        translationCache.set(cacheKey, data.translated);
+        return data.translated;
+      }
+      return '';
+    }
+
     speechRecognizer.onresult = (event) => {
       let interim = '';
       const isForeign = isForeignMeetingMode();
@@ -470,25 +510,28 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.results[i].isFinal) {
           const finalRaw = transcriptChunk.trim();
           if (finalRaw) {
+            if (interimDebounceTimer) {
+              clearTimeout(interimDebounceTimer);
+              interimDebounceTimer = null;
+            }
+            lastInterimRequested = '';
+            lastInterimTranslated = '';
+
             const nowTime = new Date().toLocaleTimeString('zh-TW', { hour12: false });
 
             if (isForeign) {
-              const tempTrans = quickLiveTranslate(finalRaw);
-              liveStreamText.textContent = `⚡ 正在翻譯 (${getSelectedLangLabel()})：${tempTrans || finalRaw}`;
+              const cachedOrQuick = translationCache.get(`${currentLangCode}::${finalRaw.toLowerCase()}`) || lastInterimTranslated || quickLiveTranslate(finalRaw);
+              liveStreamText.textContent = `⚡ 正在定稿 (${getSelectedLangLabel()})：${cachedOrQuick || finalRaw}`;
 
-              fetch('/api/translate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: finalRaw, lang: currentLangCode })
-              }).then(res => res.json()).then(data => {
-                const chineseLine = (data.success && data.translated) ? data.translated : tempTrans;
-                const formattedLine = `[${nowTime}] ${chineseLine}`;
+              fetchFastTranslation(finalRaw, currentLangCode, false).then(chineseLine => {
+                const finalZh = chineseLine || cachedOrQuick || finalRaw;
+                const formattedLine = `[${nowTime}] ${finalZh} (${finalRaw})`;
                 rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
                 rawTranscript.scrollTop = rawTranscript.scrollHeight;
                 updateTranscriptStats();
-                liveStreamText.textContent = `✅ ${chineseLine}`;
+                liveStreamText.textContent = `✅ ${finalZh}  ｜  🗣️ ${finalRaw}`;
               }).catch(() => {
-                const formattedLine = `[${nowTime}] ${tempTrans || finalRaw}`;
+                const formattedLine = `[${nowTime}] ${cachedOrQuick || finalRaw}`;
                 rawTranscript.value += (rawTranscript.value ? '\n' : '') + formattedLine;
                 rawTranscript.scrollTop = rawTranscript.scrollHeight;
                 updateTranscriptStats();
@@ -508,12 +551,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // Rolling real-time subtitle window (0ms instant preview without GPU blocking)
+      // SimulStreaming Real-Time Rolling Subtitle Window (~320ms progressive translation while speaking!)
       if (interim.trim()) {
         const liveRaw = interim.trim();
         if (isForeign) {
-          const instantZh = quickLiveTranslate(liveRaw);
-          liveStreamText.textContent = `🎙️ 正在說話 (${getSelectedLangLabel()})：${liveRaw}  ➔  [${instantZh || '即時轉譯中...'}]`;
+          const previewZh = lastInterimTranslated || quickLiveTranslate(liveRaw);
+          liveStreamText.textContent = `⚡ 即時同傳 (${getSelectedLangLabel()})：${previewZh}  ｜  🎙️ ${liveRaw}`;
+
+          // Trigger progressive background translation if text grew by >= 6 chars or after 320ms debounce
+          const charDiff = Math.abs(liveRaw.length - lastInterimRequested.length);
+          const triggerTranslation = () => {
+            lastInterimRequested = liveRaw;
+            fetchFastTranslation(liveRaw, currentLangCode, true).then(zh => {
+              if (zh) {
+                lastInterimTranslated = zh;
+                liveStreamText.textContent = `⚡ 即時同傳 (${getSelectedLangLabel()})：${zh}  ｜  🎙️ ${liveRaw}`;
+              }
+            }).catch(() => {});
+          };
+
+          if (charDiff >= 12) {
+            if (interimDebounceTimer) clearTimeout(interimDebounceTimer);
+            triggerTranslation();
+          } else {
+            if (interimDebounceTimer) clearTimeout(interimDebounceTimer);
+            interimDebounceTimer = setTimeout(triggerTranslation, 320);
+          }
         } else {
           liveStreamText.textContent = `🎙️ 正在說話：${liveRaw}`;
         }
