@@ -678,16 +678,22 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
         ? Array.from(new Set(diarSegments.map(s => s.speaker))).sort((a, b) => a - b)
         : [];
 
-      // Auto-persist transcript directly from backend to guarantee zero data loss
-      try {
-        const folderName = getMeetingFolderName(rawFilename);
-        const subDir = `${meetingsDir}\\${folderName}`;
-        Deno.mkdirSync(subDir, { recursive: true });
-        const autoTxtPath = `${subDir}\\${folderName}_(逐字稿).txt`;
-        Deno.writeTextFileSync(autoTxtPath, calibratedTranscript);
-        console.log(`[Transcribe] 💾 後端已自動歸檔逐字稿: ${autoTxtPath}`);
-      } catch (saveErr) {
-        console.warn("[Transcribe] Backend auto-save transcript notice:", saveErr);
+      // Auto-persist transcript directly from backend if auto-save transcript is enabled (default true)
+      const autoSaveTranscript = req.headers.get("X-Auto-Save-Transcript") !== "false";
+      const customDirHeader = req.headers.get("X-Custom-Dir");
+      const customDir = customDirHeader ? decodeURIComponent(customDirHeader) : "";
+      if (autoSaveTranscript) {
+        try {
+          const baseDir = resolveTargetDirectory(customDir);
+          const folderName = getMeetingFolderName(rawFilename);
+          const subDir = `${baseDir}\\${folderName}`;
+          Deno.mkdirSync(subDir, { recursive: true });
+          const autoTxtPath = `${subDir}\\${folderName}_(逐字稿).txt`;
+          Deno.writeTextFileSync(autoTxtPath, calibratedTranscript);
+          console.log(`[Transcribe] 💾 後端已自動歸檔逐字稿: ${autoTxtPath}`);
+        } catch (saveErr) {
+          console.warn("[Transcribe] Backend auto-save transcript notice:", saveErr);
+        }
       }
 
       return Response.json({
@@ -1248,6 +1254,241 @@ Deno.serve({ hostname: "127.0.0.1", port }, async (req: Request) => {
 
       console.log(`[AutoSave] Saved to ${targetFilePath}`);
       return Response.json({ success: true, path: targetFilePath, folder: meetingFolder });
+    } catch (err) {
+      return Response.json({ success: false, error: String(err) });
+    }
+  }
+
+  // 11. API: /api/storage-list (Lists all saved audio & transcript files in target directory)
+  if (pathname === "/api/storage-list" && req.method === "GET") {
+    try {
+      const customDir = url.searchParams.get("dir") || "";
+      const baseDir = resolveTargetDirectory(customDir);
+      const audioExts = [".webm", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"];
+      const textExts = [".txt", ".md", ".html", ".eml", ".doc"];
+
+      let totalAudioCount = 0;
+      let totalAudioBytes = 0;
+      let totalTextCount = 0;
+      let totalTextBytes = 0;
+
+      const items: Array<{
+        folderName: string;
+        folderPath: string;
+        mtime: number;
+        audioFiles: Array<{ name: string; path: string; size: number }>;
+        textFiles: Array<{ name: string; path: string; size: number }>;
+      }> = [];
+
+      try {
+        for (const entry of Deno.readDirSync(baseDir)) {
+          if (entry.isDirectory && !entry.name.startsWith(".")) {
+            const folderPath = `${baseDir}\\${entry.name}`;
+            const audioFiles: Array<{ name: string; path: string; size: number }> = [];
+            const textFiles: Array<{ name: string; path: string; size: number }> = [];
+            let latestMtime = 0;
+
+            try {
+              const fStat = Deno.statSync(folderPath);
+              if (fStat.mtime) latestMtime = fStat.mtime.getTime();
+            } catch (_) {}
+
+            try {
+              for (const sub of Deno.readDirSync(folderPath)) {
+                if (!sub.isFile) continue;
+                const fullPath = `${folderPath}\\${sub.name}`;
+                const lower = sub.name.toLowerCase();
+                let fSize = 0;
+                try {
+                  const st = Deno.statSync(fullPath);
+                  fSize = st.size;
+                  if (st.mtime && st.mtime.getTime() > latestMtime) {
+                    latestMtime = st.mtime.getTime();
+                  }
+                } catch (_) {}
+
+                if (audioExts.some(ext => lower.endsWith(ext))) {
+                  audioFiles.push({ name: sub.name, path: fullPath, size: fSize });
+                  totalAudioCount++;
+                  totalAudioBytes += fSize;
+                } else if (textExts.some(ext => lower.endsWith(ext))) {
+                  textFiles.push({ name: sub.name, path: fullPath, size: fSize });
+                  totalTextCount++;
+                  totalTextBytes += fSize;
+                }
+              }
+            } catch (_) {}
+
+            if (audioFiles.length > 0 || textFiles.length > 0) {
+              items.push({
+                folderName: entry.name,
+                folderPath,
+                mtime: latestMtime,
+                audioFiles,
+                textFiles
+              });
+            }
+          }
+        }
+      } catch (_) {}
+
+      items.sort((a, b) => b.mtime - a.mtime || b.folderName.localeCompare(a.folderName));
+
+      return Response.json({
+        success: true,
+        baseDir,
+        totalAudioCount,
+        totalAudioBytes,
+        totalTextCount,
+        totalTextBytes,
+        items
+      });
+    } catch (err) {
+      return Response.json({ success: false, error: String(err) });
+    }
+  }
+
+  // 12. API: /api/storage-delete (Batch or single deletion for audio / transcripts / folders)
+  if (pathname === "/api/storage-delete" && req.method === "POST") {
+    try {
+      const { action, targetPath, customDir } = await req.json();
+      const baseDir = resolveTargetDirectory(customDir);
+      const audioExts = [".webm", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"];
+      const textExts = [".txt", ".md", ".html", ".eml", ".doc"];
+
+      let deletedCount = 0;
+      let freedBytes = 0;
+
+      // Always clean temp_transcribe on any delete operation
+      try {
+        for (const t of Deno.readDirSync(tempDir)) {
+          try { Deno.removeSync(`${tempDir}\\${t.name}`, { recursive: true }); } catch (_) {}
+        }
+      } catch (_) {}
+
+      function removeFileCounted(filePath: string) {
+        try {
+          const st = Deno.statSync(filePath);
+          freedBytes += st.size;
+          Deno.removeSync(filePath);
+          deletedCount++;
+        } catch (_) {}
+      }
+
+      function cleanEmptyFolder(folderPath: string) {
+        try {
+          if (folderPath !== baseDir && folderPath !== meetingsDir && folderPath !== desktopDir) {
+            const rem = Array.from(Deno.readDirSync(folderPath));
+            if (rem.length === 0) {
+              Deno.removeSync(folderPath);
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (action === "delete_all_audio") {
+        for (const entry of Deno.readDirSync(baseDir)) {
+          const full = `${baseDir}\\${entry.name}`;
+          if (entry.isDirectory) {
+            try {
+              for (const sub of Deno.readDirSync(full)) {
+                if (sub.isFile && audioExts.some(ext => sub.name.toLowerCase().endsWith(ext))) {
+                  removeFileCounted(`${full}\\${sub.name}`);
+                }
+              }
+              cleanEmptyFolder(full);
+            } catch (_) {}
+          } else if (entry.isFile && audioExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
+            removeFileCounted(full);
+          }
+        }
+      } else if (action === "delete_all_transcripts") {
+        for (const entry of Deno.readDirSync(baseDir)) {
+          const full = `${baseDir}\\${entry.name}`;
+          if (entry.isDirectory) {
+            try {
+              for (const sub of Deno.readDirSync(full)) {
+                if (sub.isFile && textExts.some(ext => sub.name.toLowerCase().endsWith(ext))) {
+                  removeFileCounted(`${full}\\${sub.name}`);
+                }
+              }
+              cleanEmptyFolder(full);
+            } catch (_) {}
+          } else if (entry.isFile && textExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
+            removeFileCounted(full);
+          }
+        }
+      } else if (action === "delete_everything") {
+        for (const entry of Deno.readDirSync(baseDir)) {
+          const full = `${baseDir}\\${entry.name}`;
+          if (entry.isDirectory) {
+            try {
+              for (const sub of Deno.readDirSync(full)) {
+                if (sub.isFile) removeFileCounted(`${full}\\${sub.name}`);
+              }
+              Deno.removeSync(full, { recursive: true });
+            } catch (_) {}
+          } else if (entry.isFile) {
+            removeFileCounted(full);
+          }
+        }
+      } else if (action === "delete_single_audio" && targetPath) {
+        try {
+          const st = Deno.statSync(targetPath);
+          if (st.isDirectory) {
+            for (const sub of Deno.readDirSync(targetPath)) {
+              if (sub.isFile && audioExts.some(ext => sub.name.toLowerCase().endsWith(ext))) {
+                removeFileCounted(`${targetPath}\\${sub.name}`);
+              }
+            }
+            cleanEmptyFolder(targetPath);
+          } else if (st.isFile) {
+            removeFileCounted(targetPath);
+          }
+        } catch (_) {}
+      } else if (action === "delete_single_transcript" && targetPath) {
+        try {
+          const st = Deno.statSync(targetPath);
+          if (st.isDirectory) {
+            for (const sub of Deno.readDirSync(targetPath)) {
+              if (sub.isFile && textExts.some(ext => sub.name.toLowerCase().endsWith(ext))) {
+                removeFileCounted(`${targetPath}\\${sub.name}`);
+              }
+            }
+            cleanEmptyFolder(targetPath);
+          } else if (st.isFile) {
+            removeFileCounted(targetPath);
+          }
+        } catch (_) {}
+      } else if (action === "delete_single_folder" && targetPath) {
+        try {
+          for (const sub of Deno.readDirSync(targetPath)) {
+            if (sub.isFile) removeFileCounted(`${targetPath}\\${sub.name}`);
+          }
+          Deno.removeSync(targetPath, { recursive: true });
+        } catch (_) {}
+      }
+
+      return Response.json({
+        success: true,
+        deletedCount,
+        freedBytes,
+        freedMb: (freedBytes / (1024 * 1024)).toFixed(2)
+      });
+    } catch (err) {
+      return Response.json({ success: false, error: String(err) });
+    }
+  }
+
+  // 13. API: /api/open-folder (Opens target save directory in Windows Explorer)
+  if (pathname === "/api/open-folder" && req.method === "POST") {
+    try {
+      const { customDir } = await req.json();
+      const targetDir = resolveTargetDirectory(customDir);
+      try { Deno.mkdirSync(targetDir, { recursive: true }); } catch (_) {}
+      const cmd = new Deno.Command("explorer.exe", { args: [targetDir] });
+      cmd.spawn();
+      return Response.json({ success: true, path: targetDir });
     } catch (err) {
       return Response.json({ success: false, error: String(err) });
     }

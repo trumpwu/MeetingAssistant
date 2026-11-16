@@ -667,32 +667,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const currentFilename = autoFilenameInput ? autoFilenameInput.value.trim() : `Recording_${Date.now()}`;
         
-        // 1. Auto-persist audio to dedicated meeting folder
+        // 1. Auto-persist audio to dedicated meeting folder (if Auto-Save Audio is checked)
         const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
-        try {
-          const saveRes = await fetch('/api/save-audio', {
-            method: 'POST',
-            headers: {
-              'X-Filename': encodeURIComponent(currentFilename),
-              'X-Custom-Dir': encodeURIComponent(targetDir)
-            },
-            body: recordedBlob
-          });
-          const saveData = await saveRes.json();
-          if (saveData.success) {
-            console.log('Audio saved successfully to meeting folder:', saveData.path);
-          } else {
-            throw new Error(saveData.error || 'Server save failed');
+        const autoSaveAudioChk = document.getElementById('auto-save-audio-chk');
+        const autoSaveTranscriptChk = document.getElementById('auto-save-transcript-chk');
+        const shouldSaveAudio = !autoSaveAudioChk || autoSaveAudioChk.checked;
+        const shouldSaveTranscript = !autoSaveTranscriptChk || autoSaveTranscriptChk.checked;
+
+        if (shouldSaveAudio) {
+          try {
+            const saveRes = await fetch('/api/save-audio', {
+              method: 'POST',
+              headers: {
+                'X-Filename': encodeURIComponent(currentFilename),
+                'X-Custom-Dir': encodeURIComponent(targetDir)
+              },
+              body: recordedBlob
+            });
+            const saveData = await saveRes.json();
+            if (saveData.success) {
+              console.log('Audio saved successfully to meeting folder:', saveData.path);
+              if (typeof refreshStorageStats === 'function') refreshStorageStats();
+            } else {
+              throw new Error(saveData.error || 'Server save failed');
+            }
+          } catch (saveErr) {
+            console.warn('Audio auto-save to server failed, triggering emergency browser download:', saveErr);
+            const a = document.createElement('a');
+            a.href = audioUrl;
+            a.download = `${currentFilename}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
           }
-        } catch (saveErr) {
-          console.warn('Audio auto-save to server failed, triggering emergency browser download:', saveErr);
-          const a = document.createElement('a');
-          a.href = audioUrl;
-          a.download = `${currentFilename}.webm`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          showToast(`💾 伺服器通訊逾時，錄音檔已自動下載至您的「下載」資料夾，絕不丟檔！`, 6000);
+        } else {
+          console.log('Auto-save audio disabled by user setting; audio kept in browser memory only.');
         }
 
         // 2. Guaranteed Local Offline AI Auto-Transcribe (NVIDIA Nemotron 3.5 Multilingual + SenseVoice 50x)
@@ -716,7 +726,9 @@ document.addEventListener('DOMContentLoaded', () => {
             headers: {
               'X-Filename': encodeURIComponent(`${currentFilename}.webm`),
               'X-Engine': currentEngine,
-              'X-Diarize': diarizeEnabled ? 'true' : 'false'
+              'X-Diarize': diarizeEnabled ? 'true' : 'false',
+              'X-Auto-Save-Transcript': shouldSaveTranscript ? 'true' : 'false',
+              'X-Custom-Dir': encodeURIComponent(targetDir)
             },
             body: recordedBlob
           });
@@ -762,24 +774,27 @@ document.addEventListener('DOMContentLoaded', () => {
             rawTranscript.value = formatted;
             updateTranscriptStats();
 
-            // Auto-save transcript into meeting folder
-            const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
-            fetch('/api/auto-save', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                filename: transcriptFilename,
-                content: rawTranscript.value,
-                type: 'transcript',
-                customDir: targetDir
-              })
-            }).then(r => r.json()).then(saveResult => {
-              if (saveResult.folder) {
-                console.log('Transcript auto-saved to folder:', saveResult.folder);
-              }
-            }).catch(err => console.warn('Transcript auto-save error:', err));
+            // Auto-save transcript into meeting folder if enabled
+            if (shouldSaveTranscript) {
+              const transcriptFilename = `${currentFilename}_(逐字稿).txt`;
+              fetch('/api/auto-save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  filename: transcriptFilename,
+                  content: rawTranscript.value,
+                  type: 'transcript',
+                  customDir: targetDir
+                })
+              }).then(r => r.json()).then(saveResult => {
+                if (saveResult.folder) {
+                  console.log('Transcript auto-saved to folder:', saveResult.folder);
+                }
+                if (typeof refreshStorageStats === 'function') refreshStorageStats();
+              }).catch(err => console.warn('Transcript auto-save error:', err));
+            }
 
-            showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！逐字稿已自動歸檔。`, 5000);
+            showToast(`✨ ${data.engineUsed || engineLabel} 已完成轉錄 (耗時 ${elapsedSec}s)！`, 5000);
           } else {
             if (!existingLive || existingLive.includes('[系統提示]')) {
               rawTranscript.value = `[轉錄提示] ⚠️ 音訊未能辨識出清晰人聲，請確認麥克風或音源輸入正常。\n錯誤資訊：${data?.error || '無內容'}`;
@@ -965,12 +980,17 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const t0 = Date.now();
       const diarizeEnabled = document.getElementById('enable-nemotron-diarize')?.checked !== false;
+      const autoSaveTranscriptChk = document.getElementById('auto-save-transcript-chk');
+      const shouldSaveTranscript = !autoSaveTranscriptChk || autoSaveTranscriptChk.checked;
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
       const res = await fetch('/api/transcribe-file', {
         method: 'POST',
         headers: {
           'X-Filename': encodeURIComponent(file.name),
           'X-Engine': currentEngine,
-          'X-Diarize': diarizeEnabled ? 'true' : 'false'
+          'X-Diarize': diarizeEnabled ? 'true' : 'false',
+          'X-Auto-Save-Transcript': shouldSaveTranscript ? 'true' : 'false',
+          'X-Custom-Dir': encodeURIComponent(targetDir)
         },
         body: file
       });
@@ -1012,12 +1032,13 @@ document.addEventListener('DOMContentLoaded', () => {
         rawTranscript.value = (rawTranscript.value ? rawTranscript.value + '\n\n' : '') + formatted;
         rawTranscript.scrollTop = rawTranscript.scrollHeight;
         updateTranscriptStats();
+        if (typeof refreshStorageStats === 'function') refreshStorageStats();
 
         if (data.diarized && Array.isArray(data.speakers) && data.speakers.length > 0) {
           setTimeout(() => { if (typeof autoDetectSpeakers === 'function') autoDetectSpeakers(); }, 200);
         }
 
-        showToast(`✨ 成功以 ${data.engineUsed || engineLabel} 轉錄 ${file.name} (耗時 ${elapsedSec}s)！可直接產出重點會議紀錄！`, 5000);
+        showToast(`✨ 成功以 ${data.engineUsed || engineLabel} 轉錄 ${file.name} (耗時 ${elapsedSec}s)！可直接複製產出會議紀錄！`, 5000);
       } else {
         showToast(`❌ 轉錄失敗：${data.error || '無法辨識音訊內容'}`);
       }
@@ -2456,6 +2477,358 @@ ${transcript}
       showToast('✨ 已開啟新會議！逐字稿、錄音與發言人設定已全部清空重置。', 3500);
     });
   }
+
+  // ==========================================
+  // Audio & Transcript Storage / Deletion Manager
+  // ==========================================
+  const openSaveFolderBtn = document.getElementById('open-save-folder-btn');
+  const autoSaveTranscriptChk = document.getElementById('auto-save-transcript-chk');
+  const autoSaveAudioChk = document.getElementById('auto-save-audio-chk');
+  const storageSummaryText = document.getElementById('storage-summary-text');
+  const refreshStorageBtn = document.getElementById('refresh-storage-btn');
+  const btnDelAllAudio = document.getElementById('btn-del-all-audio');
+  const btnDelAllTranscripts = document.getElementById('btn-del-all-transcripts');
+  const btnToggleStorageList = document.getElementById('btn-toggle-storage-list');
+  const storageManagerPanel = document.getElementById('storage-manager-panel');
+  const storageManagerList = document.getElementById('storage-manager-list');
+  const saveTranscriptTxtBtn = document.getElementById('save-transcript-txt-btn');
+  const deleteCurrentAudioBtn = document.getElementById('delete-current-audio-btn');
+
+  // Restore saved checkbox preferences
+  if (autoSaveTranscriptChk) {
+    const savedPref = localStorage.getItem('pref_auto_save_transcript');
+    if (savedPref !== null) autoSaveTranscriptChk.checked = savedPref === 'true';
+    autoSaveTranscriptChk.addEventListener('change', () => {
+      localStorage.setItem('pref_auto_save_transcript', String(autoSaveTranscriptChk.checked));
+      showToast(autoSaveTranscriptChk.checked ? '✅ 已開啟「自動儲存逐字稿 (.txt)」' : 'ℹ️ 已關閉「自動儲存逐字稿 (.txt)」', 2500);
+    });
+  }
+
+  if (autoSaveAudioChk) {
+    const savedPref = localStorage.getItem('pref_auto_save_audio');
+    if (savedPref !== null) autoSaveAudioChk.checked = savedPref === 'true';
+    autoSaveAudioChk.addEventListener('change', () => {
+      localStorage.setItem('pref_auto_save_audio', String(autoSaveAudioChk.checked));
+      showToast(autoSaveAudioChk.checked ? '✅ 已開啟「自動儲存錄音檔 (.webm)」' : 'ℹ️ 已關閉「自動儲存錄音檔 (.webm)」（僅保留於暫存供轉錄）', 3000);
+    });
+  }
+
+  // Open Save Folder in Windows Explorer
+  if (openSaveFolderBtn) {
+    openSaveFolderBtn.addEventListener('click', async () => {
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+      try {
+        const res = await fetch('/api/open-folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customDir: targetDir })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`📂 已在檔案總管開啟：${data.path}`, 3000);
+        }
+      } catch (e) {
+        showToast('❌ 開啟資料夾失敗！');
+      }
+    });
+  }
+
+  // Manually Save / Export Transcript (.txt)
+  if (saveTranscriptTxtBtn) {
+    saveTranscriptTxtBtn.addEventListener('click', async () => {
+      const text = rawTranscript ? rawTranscript.value.trim() : '';
+      if (!text || text.startsWith('[系統提示]')) {
+        showToast('⚠️ 目前逐字稿尚無內容可儲存！', 3000);
+        return;
+      }
+      const baseName = autoFilenameInput ? autoFilenameInput.value.trim() : `Meeting_${Date.now()}`;
+      const txtFilename = `${baseName}_(逐字稿).txt`;
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+
+      // 1. Save to server folder
+      try {
+        await fetch('/api/auto-save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: txtFilename,
+            content: text,
+            type: 'transcript',
+            customDir: targetDir
+          })
+        });
+        refreshStorageStats();
+      } catch (_) {}
+
+      // 2. Also trigger Save As / Browser Download so user can pick custom location if desired
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: txtFilename,
+            types: [{
+              description: '會議逐字稿文字檔 (*.txt)',
+              accept: { 'text/plain': ['.txt'] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(text);
+          await writable.close();
+          showToast(`💾 已成功另存逐字稿：${txtFilename}`, 4000);
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            showToast(`💾 逐字稿已自動存入存檔資料夾：${txtFilename}`, 3500);
+            return;
+          }
+        }
+      }
+
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = txtFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast(`💾 已儲存並下載逐字稿：${txtFilename}`, 4000);
+    });
+  }
+
+  // Delete Current Session's Recorded Audio (both in memory and on disk if saved)
+  if (deleteCurrentAudioBtn) {
+    deleteCurrentAudioBtn.addEventListener('click', async () => {
+      if (!confirm('確定要刪除本次錄製的語音檔嗎？（逐字稿文字將會保留）')) return;
+      const currentFilename = autoFilenameInput ? autoFilenameInput.value.trim() : '';
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+
+      recordedBlob = null;
+      audioChunks = [];
+      if (audioPlayer) audioPlayer.src = '';
+      if (audioSizeDisplay) audioSizeDisplay.textContent = '0.0 MB';
+      if (recordedAudioContainer) recordedAudioContainer.style.display = 'none';
+
+      if (currentFilename) {
+        try {
+          const listRes = await fetch(`/api/storage-list?dir=${encodeURIComponent(targetDir)}`);
+          const listData = await listRes.json();
+          if (listData.success && Array.isArray(listData.items)) {
+            const match = listData.items.find(it => it.folderName === currentFilename);
+            if (match) {
+              await fetch('/api/storage-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'delete_single_audio',
+                  targetPath: match.folderPath,
+                  customDir: targetDir
+                })
+              });
+            }
+          }
+        } catch (_) {}
+      }
+      refreshStorageStats();
+      showToast('🗑️ 已刪除本次錄音語音檔！', 3500);
+    });
+  }
+
+  // Refresh Storage Statistics & Render Single-Meeting File Manager List
+  async function refreshStorageStats() {
+    const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+    try {
+      const res = await fetch(`/api/storage-list?dir=${encodeURIComponent(targetDir)}`);
+      const data = await res.json();
+      if (!data.success) return;
+
+      const audioMb = (data.totalAudioBytes / (1024 * 1024)).toFixed(1);
+      const textKb = (data.totalTextBytes / 1024).toFixed(0);
+      if (storageSummaryText) {
+        storageSummaryText.textContent = `📊 目前已存：語音檔 ${data.totalAudioCount} 個 (${audioMb} MB) ｜ 逐字稿/紀錄 ${data.totalTextCount} 份 (${textKb} KB)`;
+      }
+
+      if (storageManagerList) {
+        storageManagerList.innerHTML = '';
+        if (!data.items || data.items.length === 0) {
+          storageManagerList.innerHTML = '<div style="padding: 10px; color: #64748b; text-align: center;">目前資料夾內尚無任何已存檔的語音或逐字稿</div>';
+          return;
+        }
+
+        data.items.forEach(item => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-bottom: 1px solid #f1f5f9; gap: 8px; flex-wrap: wrap;';
+
+          const hasAudio = item.audioFiles && item.audioFiles.length > 0;
+          const hasText = item.textFiles && item.textFiles.length > 0;
+          const itemAudioMb = hasAudio
+            ? (item.audioFiles.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1)
+            : '0';
+
+          const infoSpan = document.createElement('div');
+          infoSpan.style.cssText = 'flex: 1; min-width: 180px; word-break: break-all; color: #1e293b; font-weight: 600;';
+          infoSpan.innerHTML = `${item.folderName} <span style="font-weight: 400; color: #64748b; font-size: 11.5px;">(${hasAudio ? `🎵 ${itemAudioMb}MB` : '無語音'} / ${hasText ? `📝 ${item.textFiles.length}份文字` : '無文字'})</span>`;
+
+          const btnGroup = document.createElement('div');
+          btnGroup.style.cssText = 'display: flex; gap: 4px; flex-wrap: wrap;';
+
+          // Load transcript button
+          const txtFile = (item.textFiles || []).find(f => f.name.endsWith('_(逐字稿).txt') || f.name.endsWith('.txt') || f.name.endsWith('.md'));
+          if (txtFile) {
+            const loadBtn = document.createElement('button');
+            loadBtn.type = 'button';
+            loadBtn.className = 'btn btn-outline btn-xs';
+            loadBtn.style.cssText = 'padding: 2px 6px; font-size: 11.5px; color: #2563eb; border-color: #93c5fd;';
+            loadBtn.textContent = '📂 載入';
+            loadBtn.addEventListener('click', async () => {
+              try {
+                const r = await fetch('/api/read-meeting', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ path: txtFile.path })
+                });
+                const d = await r.json();
+                if (d.success && d.content && rawTranscript) {
+                  rawTranscript.value = d.content;
+                  updateTranscriptStats();
+                  showToast(`📂 已載入逐字稿：${item.folderName}`, 3500);
+                }
+              } catch (_) {}
+            });
+            btnGroup.appendChild(loadBtn);
+          }
+
+          // Delete only audio button
+          if (hasAudio) {
+            const delAudioBtn = document.createElement('button');
+            delAudioBtn.type = 'button';
+            delAudioBtn.className = 'btn btn-outline btn-xs';
+            delAudioBtn.style.cssText = 'padding: 2px 6px; font-size: 11.5px; color: #be123c; border-color: #fda4af;';
+            delAudioBtn.textContent = '🎵 刪語音';
+            delAudioBtn.addEventListener('click', async () => {
+              if (!confirm(`確定要刪除「${item.folderName}」的語音檔 (${itemAudioMb} MB) 嗎？（逐字稿文字將保留）`)) return;
+              const r = await fetch('/api/storage-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete_single_audio', targetPath: item.folderPath, customDir: targetDir })
+              });
+              const d = await r.json();
+              if (d.success) {
+                showToast(`🗑️ 已刪除語音檔（釋放 ${d.freedMb} MB）！`);
+                refreshStorageStats();
+              }
+            });
+            btnGroup.appendChild(delAudioBtn);
+          }
+
+          // Delete only transcript button
+          if (hasText) {
+            const delTxtBtn = document.createElement('button');
+            delTxtBtn.type = 'button';
+            delTxtBtn.className = 'btn btn-outline btn-xs';
+            delTxtBtn.style.cssText = 'padding: 2px 6px; font-size: 11.5px; color: #c2410c; border-color: #fdba74;';
+            delTxtBtn.textContent = '📝 刪逐字稿';
+            delTxtBtn.addEventListener('click', async () => {
+              if (!confirm(`確定要刪除「${item.folderName}」的逐字稿與文字紀錄嗎？`)) return;
+              const r = await fetch('/api/storage-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete_single_transcript', targetPath: item.folderPath, customDir: targetDir })
+              });
+              const d = await r.json();
+              if (d.success) {
+                showToast(`🗑️ 已刪除「${item.folderName}」的文字紀錄！`);
+                refreshStorageStats();
+              }
+            });
+            btnGroup.appendChild(delTxtBtn);
+          }
+
+          // Delete entire meeting folder button
+          const delAllBtn = document.createElement('button');
+          delAllBtn.type = 'button';
+          delAllBtn.className = 'btn btn-outline btn-xs';
+          delAllBtn.style.cssText = 'padding: 2px 6px; font-size: 11.5px; color: #ffffff; background: #dc2626; border-color: #dc2626;';
+          delAllBtn.textContent = '🗑️ 整場刪除';
+          delAllBtn.addEventListener('click', async () => {
+            if (!confirm(`確定要永久刪除「${item.folderName}」的整場會議資料夾（含語音與逐字稿）嗎？`)) return;
+            const r = await fetch('/api/storage-delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'delete_single_folder', targetPath: item.folderPath, customDir: targetDir })
+            });
+            const d = await r.json();
+            if (d.success) {
+              showToast(`🗑️ 已整場刪除「${item.folderName}」！`);
+              refreshStorageStats();
+            }
+          });
+          btnGroup.appendChild(delAllBtn);
+
+          row.appendChild(infoSpan);
+          row.appendChild(btnGroup);
+          storageManagerList.appendChild(row);
+        });
+      }
+    } catch (e) {
+      console.warn('Storage stats notice:', e);
+    }
+  }
+
+  if (refreshStorageBtn) {
+    refreshStorageBtn.addEventListener('click', () => {
+      refreshStorageStats();
+      showToast('🔄 已更新儲存空間與檔案統計！', 2000);
+    });
+  }
+
+  if (btnToggleStorageList && storageManagerPanel) {
+    btnToggleStorageList.addEventListener('click', () => {
+      const isHidden = storageManagerPanel.style.display === 'none';
+      storageManagerPanel.style.display = isHidden ? 'block' : 'none';
+      btnToggleStorageList.textContent = isHidden ? '🔼 收合單筆檔案管理清單' : '🗂️ 單筆管理 / 刪除檔案';
+      if (isHidden) refreshStorageStats();
+    });
+  }
+
+  if (btnDelAllAudio) {
+    btnDelAllAudio.addEventListener('click', async () => {
+      if (!confirm('確定要一鍵刪除所有已儲存的「語音檔 (.webm/.wav/.mp3)」嗎？\n（所有文字逐字稿與會議紀錄皆會完整保留！）')) return;
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+      const r = await fetch('/api/storage-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_all_audio', customDir: targetDir })
+      });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`🧹 已成功刪除 ${d.deletedCount} 個語音檔，釋放 ${d.freedMb} MB 空間！（逐字稿已完整保留）`, 5000);
+        refreshStorageStats();
+      }
+    });
+  }
+
+  if (btnDelAllTranscripts) {
+    btnDelAllTranscripts.addEventListener('click', async () => {
+      if (!confirm('⚠️ 確定要一鍵刪除所有歷史會議的「逐字稿與文字紀錄 (.txt/.md)」嗎？此動作無法復原！')) return;
+      const targetDir = customSavePathInput ? customSavePathInput.value.trim() : '';
+      const r = await fetch('/api/storage-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_all_transcripts', customDir: targetDir })
+      });
+      const d = await r.json();
+      if (d.success) {
+        if (rawTranscript) {
+          rawTranscript.value = '';
+          updateTranscriptStats();
+        }
+        showToast(`🗑️ 已成功刪除 ${d.deletedCount} 份逐字稿與文字檔！`, 4500);
+        refreshStorageStats();
+      }
+    });
+  }
+
+  // Load storage stats on startup
+  refreshStorageStats();
 });
 
 

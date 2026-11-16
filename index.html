@@ -130,10 +130,11 @@
               </div>
             </div>
 
-            <!-- Custom Save Directory Path -->
+            <!-- Custom Save Directory Path & Storage / Deletion Manager -->
             <div class="save-path-box">
-              <div class="filename-label">
-                <span id="label-save-path">📂 錄音與逐字稿自動存檔位置：</span>
+              <div class="filename-label" style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="label-save-path">📂 語音與逐字稿儲存設定 & 檔案刪除管理：</span>
+                <button type="button" id="open-save-folder-btn" class="btn-text" style="color: #2563eb; font-weight: 700;">📁 打開存檔資料夾</button>
               </div>
               <div class="path-input-group">
                 <input type="text" id="custom-save-path" class="form-control path-input" value="D:\project\Meetings" placeholder="輸入或貼上路徑，例如：D:\project\Meetings">
@@ -142,6 +143,43 @@
                 <button type="button" class="path-chip active" data-path="D:\project\Meetings">📁 D:\project\Meetings</button>
                 <button type="button" class="path-chip" data-path="Desktop">🖥️ 桌面 (Desktop)</button>
                 <button type="button" class="path-chip" data-path="Downloads">📥 下載 (Downloads)</button>
+              </div>
+
+              <!-- Auto-Save Checkboxes (Storage Options) -->
+              <div style="margin-top: 10px; padding: 10px 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;">
+                <span style="font-size: 13px; font-weight: 700; color: #334155;">💾 自動儲存選項：</span>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #1e293b; cursor: pointer;">
+                  <input type="checkbox" id="auto-save-transcript-chk" checked>
+                  <span>自動儲存「逐字稿 (.txt)」</span>
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #1e293b; cursor: pointer;">
+                  <input type="checkbox" id="auto-save-audio-chk" checked>
+                  <span>自動儲存「錄音語音檔 (.webm)」</span>
+                </label>
+              </div>
+
+              <!-- Deletion & Space Cleanup Options -->
+              <div style="margin-top: 8px; padding: 10px 12px; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
+                  <span id="storage-summary-text" style="font-size: 12.5px; font-weight: 700; color: #9f1239;">📊 儲存空間統計讀取中...</span>
+                  <button type="button" id="refresh-storage-btn" class="btn-text" style="font-size: 12px; color: #be123c;">🔄 重新統計</button>
+                </div>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                  <button type="button" id="btn-del-all-audio" class="btn btn-outline btn-sm" style="border-color: #e11d48; color: #be123c; background: #ffffff; font-weight: 600;">
+                    🎵 刪除所有語音檔 (保留逐字稿)
+                  </button>
+                  <button type="button" id="btn-del-all-transcripts" class="btn btn-outline btn-sm" style="border-color: #f97316; color: #c2410c; background: #ffffff; font-weight: 600;">
+                    📝 刪除所有逐字稿
+                  </button>
+                  <button type="button" id="btn-toggle-storage-list" class="btn btn-outline btn-sm" style="border-color: #475569; color: #1e293b; background: #ffffff; font-weight: 600;">
+                    🗂️ 單筆管理 / 刪除檔案
+                  </button>
+                </div>
+
+                <!-- Collapsible Single-Meeting File Manager -->
+                <div id="storage-manager-panel" style="display: none; margin-top: 10px; max-height: 240px; overflow-y: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;">
+                  <div id="storage-manager-list" style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px;"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -195,16 +233,21 @@
               <span class="wave-text" id="wave-text">語音即時監聽中 (英文自動即時轉繁體中文)</span>
             </div>
 
-            <!-- Recorded Audio Player & Download -->
-            <div class="recorded-audio-box" id="recorded-audio-container" style="display: none;">
+            <!-- Recorded Audio Player & Download / Delete -->
+            <div class="recorded-audio-box" id="recorded-audio-container" style="display: none; flex-wrap: wrap; gap: 8px;">
               <div class="audio-info">
                 <span class="audio-name">🎵 錄製音訊：</span>
                 <span id="audio-size-display" class="audio-size">0.0 MB</span>
               </div>
               <audio id="audio-player" controls class="audio-player"></audio>
-              <button id="download-audio-btn" class="btn btn-success btn-sm">
-                💾 下載錄音檔 (.webm)
-              </button>
+              <div style="display: flex; gap: 6px;">
+                <button id="download-audio-btn" class="btn btn-success btn-sm">
+                  💾 另存錄音檔 (.webm)
+                </button>
+                <button id="delete-current-audio-btn" class="btn btn-danger btn-sm">
+                  🗑️ 刪除此錄音
+                </button>
+              </div>
             </div>
 
             <!-- NVIDIA Nemotron 3 Diarization Toggle (Default off for single-mic room clarity) -->
@@ -278,9 +321,10 @@
           <div class="card-body" style="flex: 1; display: flex; flex-direction: column;">
             <div class="transcript-toolbar">
               <span class="transcript-stats" id="transcript-stats">字數：0 | 行數：0</span>
-              <div class="toolbar-btns" style="display: flex; gap: 12px; align-items: center;">
+              <div class="toolbar-btns" style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap;">
+                <button id="save-transcript-txt-btn" class="btn-text" style="color: #059669; font-weight: 700;">💾 另存逐字稿 (.txt)</button>
                 <button id="reload-latest-transcript-btn" class="btn-text" style="color: #2563eb; font-weight: 700;">🔄 載入最新逐字稿</button>
-                <button id="clear-transcript-btn" class="btn-text">清空內容</button>
+                <button id="clear-transcript-btn" class="btn-text" style="color: #dc2626; font-weight: 700;">🗑️ 刪除/清空逐字稿</button>
               </div>
             </div>
 
@@ -442,6 +486,6 @@
     <div id="toast" class="toast"></div>
   </div>
 
-  <script src="app.js?v=20261102_nospeakerbug"></script>
+  <script src="app.js?v=20261105_storage"></script>
 </body>
 </html>
