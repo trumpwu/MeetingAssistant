@@ -1,105 +1,80 @@
 @echo off
-chcp 65001 >nul
-title AI 智慧會議記錄助理 - 自動安裝與環境部署精靈
+setlocal EnableExtensions
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0;%PATH%"
 
 echo ====================================================================
-echo      🚀 AI 智慧會議記錄助理 - 跨電腦全自動安裝與部署精靈
+echo   AI Meeting Assistant - Auto Installer (Supports C: and D: Drives)
 echo ====================================================================
 echo.
 
-:: 判斷安裝根目錄 (若在 D 槽優先使用 D:\project，否則使用目前所在磁碟)
-set "BASE_DIR=%~d0\project"
-if not exist "%~d0\" set "BASE_DIR=C:\project"
-set "APP_DIR=%~dp0"
-set "MODELS_DIR=%BASE_DIR%\models"
-set "LLAMA_DIR=%BASE_DIR%\llama.cpp"
+set "BASE_DIR=C:\project"
+if exist "D:\project\MeetingAssistant" set "BASE_DIR=D:\project"
+set "APP_DIR=%BASE_DIR%\MeetingAssistant"
+set "SV_DIR=%BASE_DIR%\SenseVoice"
+set "NEMO_DIR=%BASE_DIR%\NeMo-Speech"
 
 if not exist "%BASE_DIR%" mkdir "%BASE_DIR%"
-if not exist "%MODELS_DIR%" mkdir "%MODELS_DIR%"
-if not exist "%LLAMA_DIR%" mkdir "%LLAMA_DIR%"
+if not exist "%APP_DIR%" mkdir "%APP_DIR%"
+if not exist "%BASE_DIR%\Meetings" mkdir "%BASE_DIR%\Meetings"
+if not exist "%BASE_DIR%\temp_transcribe" mkdir "%BASE_DIR%\temp_transcribe"
 
-echo 📁 安裝目標路徑：%BASE_DIR%
-echo.
+echo [Step 0] Copying application files to %APP_DIR% ...
+if /I not "%~dp0"=="%APP_DIR%\" (
+    xcopy "%~dp0*.*" "%APP_DIR%\" /E /I /Y >nul 2>&1
+)
 
-:: 1. Deno 環境
-echo [1/4] 檢查 Deno 高效能伺服器環境...
+echo [Step 1/4] Checking Deno runtime (%BASE_DIR%\deno.exe) ...
 if not exist "%BASE_DIR%\deno.exe" (
-    echo 正在下載 Deno 執行檔...
-    curl -L -o "%BASE_DIR%\deno.zip" "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip" --progress-bar
-    tar -xf "%BASE_DIR%\deno.zip" -C "%BASE_DIR%"
-    del "%BASE_DIR%\deno.zip"
+    echo Downloading Deno runtime ...
+    "%SystemRoot%\System32\curl.exe" -L -o "%BASE_DIR%\deno.zip" "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+    "%SystemRoot%\System32\tar.exe" -xf "%BASE_DIR%\deno.zip" -C "%BASE_DIR%"
+    del /f /q "%BASE_DIR%\deno.zip" >nul 2>&1
 )
-echo  Deno 運行環境就緒！
+echo [OK] Deno ready.
 echo.
 
-:: 2. llama.cpp 引擎
-echo [2/4] 檢查 llama.cpp 本機 AI 推論引擎...
-if not exist "%LLAMA_DIR%\llama-server.exe" (
-    echo 正在下載 llama.cpp 引擎 (AVX2 高速版)...
-    curl -L -o "%BASE_DIR%\llama-bin.zip" "https://github.com/ggerganov/llama.cpp/releases/download/b4200/llama-b4200-bin-win-avx2-x64.zip" --progress-bar
-    tar -xf "%BASE_DIR%\llama-bin.zip" -C "%LLAMA_DIR%"
-    del "%BASE_DIR%\llama-bin.zip"
+echo [Step 2/4] Checking FFmpeg (%APP_DIR%\ffmpeg.exe) ...
+if not exist "%APP_DIR%\ffmpeg.exe" (
+    echo Downloading FFmpeg ...
+    "%SystemRoot%\System32\curl.exe" -L -o "%BASE_DIR%\ffmpeg.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    "%SystemRoot%\System32\tar.exe" -xf "%BASE_DIR%\ffmpeg.zip" -C "%BASE_DIR%"
+    for /r "%BASE_DIR%\ffmpeg-master-latest-win64-gpl" %%F in (ffmpeg.exe) do (
+        if exist "%%F" copy /Y "%%F" "%APP_DIR%\ffmpeg.exe" >nul
+    )
+    rmdir /s /q "%BASE_DIR%\ffmpeg-master-latest-win64-gpl" >nul 2>&1
+    del /f /q "%BASE_DIR%\ffmpeg.zip" >nul 2>&1
 )
-echo  llama.cpp 引擎就緒！
+echo [OK] FFmpeg ready.
 echo.
 
-:: 3. 選擇 AI 模型 (適配不同硬體規格)
-echo [3/4] 請選擇適合這台電腦規格的 AI 核心模型：
-echo.
-echo   [1] 🏆 旗艦標準版 - Qwen 2.5 7B (推薦 16GB RAM，深度推理與精準提煉) [4.46 GB]
-echo   [2] ⚡ 輕量高階版 - Qwen 2.5 3B (推薦 8GB~12GB RAM 舊筆電，超快速度)  [1.93 GB]
-echo   [3] 🚀 極速省電版 - Qwen 2.5 1.5B (推薦 4GB~8GB 老舊筆電，極致輕巧)   [1.06 GB]
-echo.
-set /p MODEL_CHOICE="請輸入選項 (預設 1，直接按 Enter 選擇 1): "
-
-if "%MODEL_CHOICE%"=="2" (
-    set "MODEL_FILE=Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-    set "MODEL_URL=https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-) else if "%MODEL_CHOICE%"=="3" (
-    set "MODEL_FILE=Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
-    set "MODEL_URL=https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
-) else (
-    set "MODEL_FILE=Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-    set "MODEL_URL=https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+echo [Step 3/4] Checking SenseVoice 50x STT Engine ...
+if not exist "%SV_DIR%\sherpa-onnx-v1.13.8-win-x64-shared-MT-Release\bin\sherpa-onnx-offline.exe" (
+    if not exist "%SV_DIR%" mkdir "%SV_DIR%"
+    echo Downloading sherpa-onnx runtime ...
+    "%SystemRoot%\System32\curl.exe" -L -o "%SV_DIR%\sherpa.tar.bz2" "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2"
+    "%SystemRoot%\System32\tar.exe" -xf "%SV_DIR%\sherpa.tar.bz2" -C "%SV_DIR%"
+    del /f /q "%SV_DIR%\sherpa.tar.bz2" >nul 2>&1
 )
-
-if not exist "%MODELS_DIR%\%MODEL_FILE%" (
-    echo.
-    echo 正在下載 AI 核心模型 [%MODEL_FILE%]...
-    curl -L -o "%MODELS_DIR%\%MODEL_FILE%" "%MODEL_URL%" --progress-bar
+if not exist "%SV_DIR%\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\model.int8.onnx" (
+    if not exist "%SV_DIR%" mkdir "%SV_DIR%"
+    echo Downloading SenseVoice multilingual model ...
+    "%SystemRoot%\System32\curl.exe" -L -o "%SV_DIR%\sv_model.tar.bz2" "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17.tar.bz2"
+    "%SystemRoot%\System32\tar.exe" -xf "%SV_DIR%\sv_model.tar.bz2" -C "%SV_DIR%"
+    del /f /q "%SV_DIR%\sv_model.tar.bz2" >nul 2>&1
 )
-echo  核心 AI 模型 [%MODEL_FILE%] 就緒！
+echo [OK] SenseVoice ready.
 echo.
 
-:: 4. NVIDIA Nemotron 3.5 多語系語音 & Nemotron 3 話者分離引擎 (NeMo-Speech.cpp)
-echo [4/5] 檢查 NVIDIA Nemotron 3.5 多語系語音引擎 (NeMo-Speech.cpp)...
-if not exist "%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" (
-    echo 正在下載 NeMo-Speech.cpp 引擎 (CPU 版)...
-    if not exist "%BASE_DIR%\NeMo-Speech" mkdir "%BASE_DIR%\NeMo-Speech"
-    curl -L -o "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.2.0/nemo-speech-0.2.0-windows-x86_64-cpu.zip" --progress-bar
-    tar -xf "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip" -C "%BASE_DIR%\NeMo-Speech"
-    del "%BASE_DIR%\NeMo-Speech\nemo-speech-cpu.zip"
+echo [Step 4/4] Building Desktop Launcher ...
+if exist "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" (
+    "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /target:winexe /out:"%APP_DIR%\AI_Meeting_Assistant.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "%APP_DIR%\Launcher.cs" >nul 2>&1
+    copy /Y "%APP_DIR%\AI_Meeting_Assistant.exe" "%USERPROFILE%\Desktop\AI_Meeting_Assistant.exe" >nul 2>&1
 )
-echo 正在拉取/確認 NVIDIA Nemotron 3.5 40語系語音模型 (707 MB) 與話者分離模型...
-"%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3.5
-"%BASE_DIR%\NeMo-Speech\nemo-speech-0.2.0-windows-x86_64-cpu\bin\nemo-speech.exe" pull nemotron-3-diarization
-echo  NVIDIA Nemotron 3.5 多語系語音與話者分離引擎就緒！
-echo.
-
-:: 5. 編譯與建立原生 Windows 桌面主程式 (.exe) 與訓練工具
-echo [5/5] 正在封裝原生 Windows 桌面程式與自動微調工具...
-if not exist "%APP_DIR%\TrainingData" mkdir "%APP_DIR%\TrainingData"
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:"%APP_DIR%\AI智慧會議助理.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "%APP_DIR%\Launcher.cs" >nul 2>&1
-copy /Y "%APP_DIR%\AI智慧會議助理.exe" "%USERPROFILE%\Desktop\AI智慧會議助理.exe" >nul
-copy /Y "%APP_DIR%\一鍵配對與模型訓練.bat" "%USERPROFILE%\Desktop\一鍵配對與模型訓練.bat" >nul
-echo  桌面主程式已建立至：%USERPROFILE%\Desktop\AI智慧會議助理.exe
-echo  自動微調工具已建立至：%USERPROFILE%\Desktop\一鍵配對與模型訓練.bat
-echo.
+copy /Y "%APP_DIR%\MeetingAssistant_StartCore.bat" "%USERPROFILE%\Desktop\Start_Meeting_Assistant.bat" >nul 2>&1
 
 echo ====================================================================
-echo   🎉 全自動原生桌面應用程式與 AI 微調管線封裝完成！
-echo   1. 雙擊桌面【AI智慧會議助理.exe】立即開始使用會議助理！
-echo   2. 雙擊桌面【一鍵配對與模型訓練.bat】可自動配對微調數據！
+echo   [SUCCESS] Installation Complete!
+echo   Starting AI Meeting Assistant now ...
 echo ====================================================================
-echo.
+call "%APP_DIR%\MeetingAssistant_StartCore.bat"
 pause
