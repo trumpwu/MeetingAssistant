@@ -1,22 +1,35 @@
 import * as OpenCC from "npm:opencc-js";
 const toTaiwanTraditional = OpenCC.Converter({ from: "cn", to: "tw" });
 
-// Deno High-Performance Server for Meeting Assistant (Port 8088)
+// Deno High-Performance Server for Meeting Assistant (Port 8088, Auto-detects D:\project or C:\project)
 const port = 8088;
-const root = "D:\\project\\MeetingAssistant";
-const meetingsDir = "D:\\project\\Meetings";
-const tempDir = "D:\\project\\temp_transcribe";
-const desktopDir = "C:\\Users\\Innovare\\Desktop";
-const ffmpeg = "D:\\project\\MeetingAssistant\\ffmpeg.exe";
+const baseDriveDir = (() => {
+  try {
+    if (Deno.statSync("D:\\project\\MeetingAssistant").isDirectory) return "D:\\project";
+  } catch (_) {}
+  return "C:\\project";
+})();
+const userHome = Deno.env.get("USERPROFILE") || "C:\\Users\\Public";
+const root = `${baseDriveDir}\\MeetingAssistant`;
+const meetingsDir = `${baseDriveDir}\\Meetings`;
+const tempDir = `${baseDriveDir}\\temp_transcribe`;
+const desktopDir = `${userHome}\\Desktop`;
+const downloadsDir = `${userHome}\\Downloads`;
+const ffmpeg = (() => {
+  try {
+    if (Deno.statSync(`${root}\\ffmpeg.exe`).isFile) return `${root}\\ffmpeg.exe`;
+  } catch (_) {}
+  return "ffmpeg";
+})();
 
 // Alibaba SenseVoice (sherpa-onnx FunASR Nano int8)
-const senseVoiceCli = "D:\\project\\SenseVoice\\sherpa-onnx-v1.13.8-win-x64-shared-MT-Release\\bin\\sherpa-onnx-offline.exe";
-const senseVoiceModel = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\model.int8.onnx";
-const senseVoiceTokens = "D:\\project\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\tokens.txt";
+const senseVoiceCli = `${baseDriveDir}\\SenseVoice\\sherpa-onnx-v1.13.8-win-x64-shared-MT-Release\\bin\\sherpa-onnx-offline.exe`;
+const senseVoiceModel = `${baseDriveDir}\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\model.int8.onnx`;
+const senseVoiceTokens = `${baseDriveDir}\\SenseVoice\\sherpa-onnx-sense-voice-funasr-nano-int8-2025-12-17\\tokens.txt`;
 
 // NVIDIA NeMo-Speech / Nemotron 3.5 40-Language ASR & Nemotron 3 Diarization (Streaming Sortformer v2)
-const nemoSpeechCli = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin\\nemo-speech.exe";
-const nemoBinDir = "D:\\project\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin";
+const nemoSpeechCli = `${baseDriveDir}\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin\\nemo-speech.exe`;
+const nemoBinDir = `${baseDriveDir}\\NeMo-Speech\\nemo-speech-0.2.0-windows-x86_64-cpu\\bin`;
 
 function hasNemotronCli(): boolean {
   try {
@@ -399,9 +412,7 @@ function resolveTargetDirectory(customDir?: string): string {
   if (!customDir || customDir.trim() === "") return meetingsDir;
   const trimmed = customDir.trim();
   if (trimmed.toLowerCase() === "desktop") return desktopDir;
-  if (trimmed.toLowerCase() === "downloads") {
-    return "C:\\Users\\Innovare\\Downloads";
-  }
+  if (trimmed.toLowerCase() === "downloads") return downloadsDir;
   try {
     Deno.mkdirSync(trimmed, { recursive: true });
     return trimmed;
